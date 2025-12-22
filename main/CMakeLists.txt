@@ -11,6 +11,10 @@ idf_component_register(
         "screens/network_list_screen.c"
         "screens/attack_select_screen.c"
         "screens/deauth_screen.c"
+        "screens/evil_twin_screen.c"
+        "screens/html_select_screen.c"
+        "screens/sae_overflow_screen.c"
+        "screens/handshaker_screen.c"
         "screens/placeholder_screen.c"
     INCLUDE_DIRS 
         "."

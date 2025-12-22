@@ -5,6 +5,9 @@
 
 #include "attack_select_screen.h"
 #include "deauth_screen.h"
+#include "html_select_screen.h"
+#include "sae_overflow_screen.h"
+#include "handshaker_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -98,6 +101,59 @@ static void on_key(screen_t *self, key_code_t key)
                         memcpy(params->networks, data->networks, 
                                data->network_count * sizeof(wifi_network_t));
                         screen_manager_push(deauth_screen_create, params);
+                    } else {
+                        free(params);
+                    }
+                }
+            } else if (data->selected_index == 1) {
+                // Evil Twin attack selected - go to HTML portal selection first
+                html_select_screen_params_t *params = malloc(sizeof(html_select_screen_params_t));
+                if (params) {
+                    // Copy networks to HTML select screen
+                    params->networks = malloc(data->network_count * sizeof(wifi_network_t));
+                    params->network_count = data->network_count;
+                    
+                    if (params->networks) {
+                        memcpy(params->networks, data->networks, 
+                               data->network_count * sizeof(wifi_network_t));
+                        screen_manager_push(html_select_screen_create, params);
+                    } else {
+                        free(params);
+                    }
+                }
+            } else if (data->selected_index == 2) {
+                // SAE Overflow - requires exactly 1 network
+                if (data->network_count != 1) {
+                    ui_show_message("Error", "Select exactly 1 network");
+                    draw_screen(self);  // Redraw after message
+                    break;
+                }
+                
+                // Send start command
+                uart_send_command("start_sae_overflow");
+                
+                // Create SAE overflow screen params
+                sae_overflow_screen_params_t *params = malloc(sizeof(sae_overflow_screen_params_t));
+                if (params) {
+                    // Copy single network
+                    params->network = data->networks[0];
+                    screen_manager_push(sae_overflow_screen_create, params);
+                }
+            } else if (data->selected_index == 3) {
+                // Handshaker attack selected
+                uart_send_command("start_handshake");
+                
+                // Create handshaker screen params
+                handshaker_screen_params_t *params = malloc(sizeof(handshaker_screen_params_t));
+                if (params) {
+                    // Copy networks to handshaker screen
+                    params->networks = malloc(data->network_count * sizeof(wifi_network_t));
+                    params->count = data->network_count;
+                    
+                    if (params->networks) {
+                        memcpy(params->networks, data->networks, 
+                               data->network_count * sizeof(wifi_network_t));
+                        screen_manager_push(handshaker_screen_create, params);
                     } else {
                         free(params);
                     }
