@@ -20,6 +20,7 @@ idf_component_register(
         "screens/sniffer_probes_screen.c"
         "screens/global_attacks_screen.c"
         "screens/blackout_screen.c"
+        "screens/global_handshaker_screen.c"
         "screens/placeholder_screen.c"
     INCLUDE_DIRS 
         "."

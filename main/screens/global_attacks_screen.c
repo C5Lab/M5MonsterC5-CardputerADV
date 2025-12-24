@@ -5,6 +5,7 @@
 
 #include "global_attacks_screen.h"
 #include "blackout_screen.h"
+#include "global_handshaker_screen.h"
 #include "placeholder_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -83,7 +84,7 @@ static void on_key(screen_t *self, key_code_t key)
                         screen_manager_push(blackout_screen_create, NULL);
                         break;
                     case 1:  // Handshaker
-                        screen_manager_push(placeholder_screen_create, (void*)"Handshaker");
+                        screen_manager_push(global_handshaker_screen_create, NULL);
                         break;
                     case 2:  // Portal
                         screen_manager_push(placeholder_screen_create, (void*)"Portal");
@@ -149,4 +150,5 @@ screen_t* global_attacks_screen_create(void *params)
     ESP_LOGI(TAG, "Global attacks screen created");
     return screen;
 }
+
 
