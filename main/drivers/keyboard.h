@@ -62,8 +62,15 @@ typedef enum {
     KEY_OPT,
     KEY_ALT,
     KEY_DEL,
+    KEY_SHIFT,
     KEY_MAX
 } key_code_t;
+
+/**
+ * @brief Check if shift key is currently held
+ * @return true if shift is pressed
+ */
+bool keyboard_is_shift_held(void);
 
 // Key event callback type
 typedef void (*key_event_callback_t)(key_code_t key, bool pressed);

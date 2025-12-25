@@ -21,6 +21,9 @@ idf_component_register(
         "screens/global_attacks_screen.c"
         "screens/blackout_screen.c"
         "screens/global_handshaker_screen.c"
+        "screens/text_input_screen.c"
+        "screens/global_portal_html_screen.c"
+        "screens/global_portal_screen.c"
         "screens/placeholder_screen.c"
     INCLUDE_DIRS 
         "."

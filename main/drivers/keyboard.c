@@ -179,89 +179,92 @@ static esp_err_t tca8418_init(void)
 }
 
 /**
+ * @brief Keyboard layout map from M5Stack official code
+ * Layout: 4 rows × 14 columns after remap
+ * 
+ * Row 0: `  1  2  3  4  5  6  7  8  9  0  -  =  del
+ * Row 1: tab q  w  e  r  t  y  u  i  o  p  [  ]  \
+ * Row 2: shift caps a  s  d  f  g  h  j  k  l  ;  '  enter  
+ * Row 3: ctrl opt alt z  x  c  v  b  n  m  ,  .  /  space
+ */
+static const key_code_t _key_value_map[4][14] = {
+    // Row 0: ` 1 2 3 4 5 6 7 8 9 0 - = del
+    {KEY_ESC, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0, KEY_NONE, KEY_NONE, KEY_BACKSPACE},
+    // Row 1: tab q w e r t y u i o p [ ] backslash
+    {KEY_TAB, KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P, KEY_NONE, KEY_NONE, KEY_NONE},
+    // Row 2: fn shift a s d f g h j k l ; ' enter (code 3=fn, code 7=shift)
+    {KEY_FN, KEY_SHIFT, KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L, KEY_NONE, KEY_NONE, KEY_ENTER},
+    // Row 3: ctrl opt alt z x c v b n m , . / space
+    {KEY_NONE, KEY_OPT, KEY_ALT, KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M, KEY_NONE, KEY_NONE, KEY_NONE, KEY_SPACE}
+};
+
+// Shift key state
+static bool shift_held = false;
+
+/**
+ * @brief Remap TCA8418 raw coordinates to Cardputer layout
+ * Based on M5Stack official keyboard.cpp
+ */
+static void remap_key(uint8_t *row, uint8_t *col)
+{
+    uint8_t raw_row = *row;
+    uint8_t raw_col = *col;
+    
+    // Col: raw_row * 2, +1 if raw_col > 3
+    uint8_t new_col = raw_row * 2;
+    if (raw_col > 3) new_col++;
+    
+    // Row: (raw_col + 4) % 4
+    uint8_t new_row = (raw_col + 4) % 4;
+    
+    *row = new_row;
+    *col = new_col;
+}
+
+/**
  * @brief Convert TCA8418 key code to our key_code_t
- * Key code format: row * 10 + col (1-80 for 8x10 matrix)
+ * Uses M5Stack official remap algorithm + special keys
  */
 static key_code_t tca8418_to_keycode(uint8_t key_code)
 {
-    // TCA8418 key codes based on actual Cardputer ADV testing
-    // Key code format: (row * 10) + col + 1
+    if (key_code == 0) return KEY_NONE;
     
+    // Special keys that are outside the standard 4x14 matrix
+    // These were confirmed by user testing
     switch (key_code) {
-        // Navigation keys (confirmed from testing)
-        case 57: return KEY_UP;      // row=5, col=6
-        case 58: return KEY_DOWN;    // row=5, col=7
-        case 67: return KEY_ENTER;   // row=6, col=6
-        
-        // Assumed based on layout (row 5 = navigation row)
-        case 56: return KEY_LEFT;    // row=5, col=5
-        case 59: return KEY_RIGHT;   // row=5, col=8
-        
-        // Row 6 - control keys
-        case 65: return KEY_BACKSPACE; // row=6, col=4 (actual backspace)
-        case 68: return KEY_SPACE;   // row=6, col=7
-        case 66: return KEY_ESC;     // row=6, col=5
-        case 69: return KEY_BACKSPACE; // row=6, col=8 (alternate)
-        
-        // Row 0 - numbers
-        case 1: return KEY_1;
-        case 2: return KEY_2;
-        case 3: return KEY_3;
-        case 4: return KEY_4;
-        case 5: return KEY_5;
-        case 6: return KEY_6;
-        case 7: return KEY_7;
-        case 8: return KEY_8;
-        case 9: return KEY_9;
-        case 10: return KEY_0;
-        
-        // Row 1 - QWERTYUIOP
-        case 11: return KEY_Q;
-        case 12: return KEY_W;
-        case 13: return KEY_E;
-        case 14: return KEY_R;
-        case 15: return KEY_T;
-        case 16: return KEY_Y;
-        case 17: return KEY_U;
-        case 18: return KEY_I;
-        case 19: return KEY_O;
-        case 20: return KEY_P;
-        
-        // Row 2 - ASDFGHJKL
-        case 21: return KEY_A;
-        case 22: return KEY_R;  // Physical R key on Cardputer
-        case 23: return KEY_D;
-        case 24: return KEY_F;
-        case 25: return KEY_G;
-        case 26: return KEY_H;
-        case 27: return KEY_J;
-        case 28: return KEY_K;
-        case 29: return KEY_L;
-        
-        // Row 3 - ZXCVBNM
-        case 31: return KEY_Z;
-        case 32: return KEY_X;
-        case 33: return KEY_C;
-        case 34: return KEY_V;
-        case 35: return KEY_B;
-        case 36: return KEY_N;
-        case 37: return KEY_M;
-        
-        // Additional key mappings from testing
-        case 44: return KEY_N;  // Alternate N key location (row=4, col=3)
-        
-        // Function keys
-        case 41: return KEY_TAB;
-        case 51: return KEY_FN;
-        case 52: return KEY_P;  // Physical P key on Cardputer
-        case 61: return KEY_ALT;
-        case 71: return KEY_OPT;
-        
-        default:
-            ESP_LOGW(TAG, "Unknown key code: %d (row=%d, col=%d)", 
-                     key_code, (key_code - 1) / 10, (key_code - 1) % 10);
-            return KEY_NONE;
+        case 57: return KEY_UP;
+        case 58: return KEY_DOWN;
+        case 56: return KEY_LEFT;
+        case 59: return KEY_RIGHT;
     }
+    
+    // Parse raw code to row/col
+    // Formula: key_code = (row * 10) + col + 1
+    uint16_t buffer = key_code;
+    buffer--;
+    uint8_t raw_row = buffer / 10;
+    uint8_t raw_col = buffer % 10;
+    
+    // Apply remap (from M5Stack official code)
+    uint8_t row = raw_row;
+    uint8_t col = raw_col;
+    remap_key(&row, &col);
+    
+    // Bounds check
+    if (row >= 4 || col >= 14) {
+        ESP_LOGW(TAG, "Key out of bounds: code=%d raw(%d,%d) -> (%d,%d)", 
+                 key_code, raw_row, raw_col, row, col);
+        return KEY_NONE;
+    }
+    
+    key_code_t result = _key_value_map[row][col];
+    
+    if (result == KEY_NONE) {
+        ESP_LOGD(TAG, "Unmapped key: code=%d raw(%d,%d) -> (%d,%d)", 
+                 key_code, raw_row, raw_col, row, col);
+    }
+    
+    return result;
 }
 
 esp_err_t keyboard_init(void)
@@ -341,16 +344,20 @@ static void scan_keyboard(void)
         
         ESP_LOGI(TAG, "Key event: code=%d, %s", key_code, pressed ? "PRESSED" : "released");
         
-        if (pressed) {
-            key_code_t key = tca8418_to_keycode(key_code);
+        key_code_t key = tca8418_to_keycode(key_code);
+        
+        // Track shift state (press and release)
+        if (key == KEY_SHIFT) {
+            shift_held = pressed;
+            ESP_LOGI(TAG, "Shift %s", pressed ? "pressed" : "released");
+        }
+        
+        if (pressed && key != KEY_NONE && key != KEY_SHIFT) {
+            last_key = key;
+            xQueueSend(key_queue, &key, 0);
             
-            if (key != KEY_NONE) {
-                last_key = key;
-                xQueueSend(key_queue, &key, 0);
-                
-                if (key_callback) {
-                    key_callback(key, true);
-                }
+            if (key_callback) {
+                key_callback(key, true);
             }
         }
     }
@@ -387,4 +394,9 @@ key_code_t keyboard_get_key(void)
 bool keyboard_is_pressed(key_code_t key)
 {
     return (last_key == key);
+}
+
+bool keyboard_is_shift_held(void)
+{
+    return shift_held;
 }

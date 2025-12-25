@@ -6,6 +6,8 @@
 #include "global_attacks_screen.h"
 #include "blackout_screen.h"
 #include "global_handshaker_screen.h"
+#include "text_input_screen.h"
+#include "global_portal_html_screen.h"
 #include "placeholder_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -13,6 +15,27 @@
 #include <stdlib.h>
 
 static const char *TAG = "GLOBAL_ATK";
+
+/**
+ * @brief Callback when portal SSID is entered
+ */
+static void on_portal_ssid_entered(const char *ssid, void *user_data)
+{
+    (void)user_data;
+    
+    ESP_LOGI(TAG, "Portal SSID entered: %s", ssid);
+    
+    // Create params for HTML selection screen
+    global_portal_html_params_t *params = malloc(sizeof(global_portal_html_params_t));
+    if (params) {
+        strncpy(params->ssid, ssid, sizeof(params->ssid) - 1);
+        params->ssid[sizeof(params->ssid) - 1] = '\0';
+        
+        // Pop the text input screen and push HTML selection
+        screen_manager_pop();
+        screen_manager_push(global_portal_html_screen_create, params);
+    }
+}
 
 // Menu items
 static const char *menu_items[] = {
@@ -87,7 +110,16 @@ static void on_key(screen_t *self, key_code_t key)
                         screen_manager_push(global_handshaker_screen_create, NULL);
                         break;
                     case 2:  // Portal
-                        screen_manager_push(placeholder_screen_create, (void*)"Portal");
+                        {
+                            text_input_params_t *params = malloc(sizeof(text_input_params_t));
+                            if (params) {
+                                params->title = "Enter Portal SSID";
+                                params->hint = "Use keyboard, ENTER to confirm";
+                                params->on_submit = on_portal_ssid_entered;
+                                params->user_data = NULL;
+                                screen_manager_push(text_input_screen_create, params);
+                            }
+                        }
                         break;
                     case 3:  // Sniffer Dog
                         screen_manager_push(placeholder_screen_create, (void*)"Sniffer Dog");
