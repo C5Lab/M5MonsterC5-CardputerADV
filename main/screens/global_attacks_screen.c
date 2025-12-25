@@ -9,6 +9,7 @@
 #include "text_input_screen.h"
 #include "global_portal_html_screen.h"
 #include "sniffer_dog_screen.h"
+#include "wardrive_screen.h"
 #include "placeholder_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -126,7 +127,7 @@ static void on_key(screen_t *self, key_code_t key)
                         screen_manager_push(sniffer_dog_screen_create, NULL);
                         break;
                     case 4:  // Wardrive
-                        screen_manager_push(placeholder_screen_create, (void*)"Wardrive");
+                        screen_manager_push(wardrive_screen_create, NULL);
                         break;
                 }
             }
