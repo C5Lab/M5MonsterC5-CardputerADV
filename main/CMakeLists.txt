@@ -24,6 +24,7 @@ idf_component_register(
         "screens/text_input_screen.c"
         "screens/global_portal_html_screen.c"
         "screens/global_portal_screen.c"
+        "screens/sniffer_dog_screen.c"
         "screens/placeholder_screen.c"
     INCLUDE_DIRS 
         "."
