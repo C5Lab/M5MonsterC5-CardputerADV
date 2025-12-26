@@ -31,6 +31,11 @@ idf_component_register(
         "screens/karma_probes_screen.c"
         "screens/karma_html_screen.c"
         "screens/karma_attack_screen.c"
+        "screens/bt_menu_screen.c"
+        "screens/airtag_scan_screen.c"
+        "screens/bt_scan_screen.c"
+        "screens/bt_locator_screen.c"
+        "screens/bt_locator_track_screen.c"
         "screens/placeholder_screen.c"
     INCLUDE_DIRS 
         "."
