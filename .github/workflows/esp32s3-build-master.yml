@@ -6,6 +6,10 @@ on:
       release_tag:
         description: "Optional tag name to upload assets to a release (example 'v1.2.3')"
         required: false
+      rebuild_release:
+        description: "Delete existing assets for the tag before uploading (rebuild release)"
+        required: false
+        default: "false"
   push:
     branches: [main, master]
     paths:
@@ -62,8 +66,21 @@ jobs:
             exit 1
           fi
           cp "$src" "$dst"
+          cp "$src" "binaries-esp32s3/M5MonsterC5-CardputerADV-launcher.bin"
+          cp "$src" "binaries-esp32s3/M5MonsterC5-CardputerADV-launcher-${version}.bin"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "release_asset=${dst}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge full flash image
+        run: |
+          set -euo pipefail
+          python -m esptool --chip esp32s3 merge_bin -o "binaries-esp32s3/M5MonsterC5-CardputerADV-full-${{ steps.version.outputs.version }}.bin" \
+            --flash_mode dio --flash_freq 80m --flash_size 4MB \
+            0x0 "binaries-esp32s3/bootloader.bin" \
+            0x8000 "binaries-esp32s3/partition-table.bin" \
+            0x10000 "binaries-esp32s3/M5MonsterC5-CardputerADV.bin"
+          cp "binaries-esp32s3/M5MonsterC5-CardputerADV-full-${{ steps.version.outputs.version }}.bin" \
+            "binaries-esp32s3/M5MonsterC5-CardputerADV-full.bin"
 
       - name: Package JANOS_ADV zip
         id: bundle
@@ -76,7 +93,11 @@ jobs:
             bootloader.bin \
             partition-table.bin \
             flash_board.py \
+            M5MonsterC5-CardputerADV-full.bin \
+            "M5MonsterC5-CardputerADV-full-${{ steps.version.outputs.version }}.bin" \
             "M5MonsterC5-CardputerADV-${{ steps.version.outputs.version }}.bin" \
+            "M5MonsterC5-CardputerADV-launcher-${{ steps.version.outputs.version }}.bin" \
+            M5MonsterC5-CardputerADV-launcher.bin \
             M5MonsterC5-CardputerADV.bin
           echo "bundle_zip=$(pwd)/$out" >> "$GITHUB_OUTPUT"
 
@@ -93,6 +114,20 @@ jobs:
     runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     steps:
+      - name: Resolve release tag
+        id: meta
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
+        run: |
+          set -euo pipefail
+          TAG="${EVENT_TAG:-}"
+          if [ -z "$TAG" ]; then TAG="${INPUT_TAG:-}"; fi
+          if [ -z "$TAG" ]; then TAG="v${FW_VERSION}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Using tag: $TAG"
+
       - name: Download JanOS_ADV artifacts
         uses: actions/download-artifact@v4
         with:
@@ -112,8 +147,12 @@ jobs:
             firmware/bootloader.bin
             firmware/partition-table.bin
             firmware/flash_board.py
+            firmware/M5MonsterC5-CardputerADV-full.bin
+            "firmware/M5MonsterC5-CardputerADV-full-${FW_VERSION}.bin"
             firmware/M5MonsterC5-CardputerADV.bin
             "firmware/M5MonsterC5-CardputerADV-${FW_VERSION}.bin"
+            "firmware/M5MonsterC5-CardputerADV-launcher-${FW_VERSION}.bin"
+            firmware/M5MonsterC5-CardputerADV-launcher.bin
           )
 
           # Include existing JanOS_ADV zip if present
@@ -125,17 +164,46 @@ jobs:
           rm -f "$out"
           zip -9 "$out" "${files[@]}"
 
+      - name: Delete existing assets (rebuild)
+        if: github.event_name == 'workflow_dispatch' && inputs.rebuild_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          assets=(
+            "bootloader.bin"
+            "partition-table.bin"
+            "flash_board.py"
+            "M5MonsterC5-CardputerADV-full.bin"
+            "M5MonsterC5-CardputerADV-full-${{ needs.firmware.outputs.fw_version }}.bin"
+            "M5MonsterC5-CardputerADV.bin"
+            "M5MonsterC5-CardputerADV-${{ needs.firmware.outputs.fw_version }}.bin"
+            "M5MonsterC5-CardputerADV-launcher.bin"
+            "M5MonsterC5-CardputerADV-launcher-${{ needs.firmware.outputs.fw_version }}.bin"
+            "M5MonsterC5-CardputerADV-${{ needs.firmware.outputs.fw_version }}.zip"
+          )
+          for name in "${assets[@]}"; do
+            if gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq ".assets[].name" | grep -qx "$name"; then
+              gh release delete-asset "$TAG" "$name" -R "$GITHUB_REPOSITORY" -y
+            fi
+          done
+
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', needs.firmware.outputs.fw_version) }}
+          tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ format('M5MonsterC5-CardputerADV {0}', needs.firmware.outputs.fw_version) }}
           files: |
             release_artifacts/firmware/bootloader.bin
             release_artifacts/firmware/partition-table.bin
             release_artifacts/firmware/flash_board.py
+            release_artifacts/firmware/M5MonsterC5-CardputerADV-full.bin
+            release_artifacts/firmware/M5MonsterC5-CardputerADV-full-${{ needs.firmware.outputs.fw_version }}.bin
             release_artifacts/firmware/M5MonsterC5-CardputerADV.bin
             release_artifacts/firmware/M5MonsterC5-CardputerADV-${{ needs.firmware.outputs.fw_version }}.bin
+            release_artifacts/firmware/M5MonsterC5-CardputerADV-launcher.bin
+            release_artifacts/firmware/M5MonsterC5-CardputerADV-launcher-${{ needs.firmware.outputs.fw_version }}.bin
             release_artifacts/firmware/M5MonsterC5-CardputerADV-${{ needs.firmware.outputs.fw_version }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
