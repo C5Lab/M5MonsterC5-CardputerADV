@@ -5,6 +5,9 @@
 
 #include "home_screen.h"
 #include "wifi_scan_screen.h"
+#include "global_attacks_screen.h"
+#include "sniff_karma_menu_screen.h"
+#include "bt_menu_screen.h"
 #include "placeholder_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -21,10 +24,10 @@ typedef struct {
 
 static const menu_item_t menu_items[] = {
     {"WiFi Scan & Attack", wifi_scan_screen_create, NULL},
-    {"Global WiFi Attacks", NULL, "Global WiFi Attacks"},
-    {"WiFi Sniff&Karma", NULL, "WiFi Sniff & Karma"},
+    {"Global WiFi Attacks", global_attacks_screen_create, NULL},
+    {"WiFi Sniff&Karma", sniff_karma_menu_screen_create, NULL},
     {"WiFi Monitor", NULL, "WiFi Monitor"},
-    {"Bluetooth", NULL, "Bluetooth"},
+    {"Bluetooth", bt_menu_screen_create, NULL},
 };
 
 #define MENU_ITEM_COUNT (sizeof(menu_items) / sizeof(menu_items[0]))

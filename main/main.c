@@ -59,9 +59,17 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Application started successfully!");
 
-    // Main loop - process keyboard input
+    // Main loop - process keyboard input and periodic screen updates
+    int tick_counter = 0;
     while (1) {
         keyboard_process();
+        
+        // Call screen tick every 500ms (50 * 10ms) for responsive UI updates
+        if (++tick_counter >= 50) {
+            tick_counter = 0;
+            screen_manager_tick();
+        }
+        
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

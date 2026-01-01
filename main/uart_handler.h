@@ -12,8 +12,8 @@
 
 // UART Configuration
 #define UART_PORT_NUM       UART_NUM_1
-#define UART_TX_PIN         2
-#define UART_RX_PIN         1
+#define UART_TX_PIN         2//15
+#define UART_RX_PIN         1//13
 #define UART_BAUD_RATE      115200
 #define UART_BUF_SIZE       4096
 

@@ -44,14 +44,9 @@ static void key_event_handler(key_code_t key, bool pressed)
 
 void screen_manager_handle_key(key_code_t key)
 {
-    // Global back navigation with ESC or BACKSPACE (except on root screen)
-    if ((key == KEY_ESC || key == KEY_BACKSPACE) && stack_depth > 1) {
-        screen_manager_pop();
-        return;
-    }
-    
     screen_t *current = screen_manager_get_current();
     
+    // Always let the screen handle the key first
     if (current && current->on_key) {
         current->on_key(current, key);
     }
@@ -184,5 +179,13 @@ void screen_manager_redraw(void)
     screen_t *current = screen_manager_get_current();
     if (current && current->on_draw) {
         current->on_draw(current);
+    }
+}
+
+void screen_manager_tick(void)
+{
+    screen_t *current = screen_manager_get_current();
+    if (current && current->on_tick) {
+        current->on_tick(current);
     }
 }

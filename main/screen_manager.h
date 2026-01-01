@@ -26,6 +26,7 @@ struct screen_t {
     void (*on_destroy)(screen_t *self);     // Cleanup function
     void (*on_resume)(screen_t *self);      // Called when screen becomes active again
     void (*on_draw)(screen_t *self);        // Called to redraw the screen
+    void (*on_tick)(screen_t *self);        // Called periodically from main loop
 };
 
 /**
@@ -88,5 +89,10 @@ screen_t* screen_alloc(void);
  * @brief Request a screen redraw
  */
 void screen_manager_redraw(void);
+
+/**
+ * @brief Call current screen's tick handler (for periodic updates)
+ */
+void screen_manager_tick(void);
 
 #endif // SCREEN_MANAGER_H

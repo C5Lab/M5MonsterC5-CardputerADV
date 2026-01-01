@@ -1,10 +1,10 @@
 /**
- * @file html_select_screen.c
- * @brief HTML portal selection screen for Evil Twin attack
+ * @file global_portal_html_screen.c
+ * @brief HTML selection screen for Global Portal attack
  */
 
-#include "html_select_screen.h"
-#include "evil_twin_screen.h"
+#include "global_portal_html_screen.h"
+#include "global_portal_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 
-static const char *TAG = "HTML_SEL";
+static const char *TAG = "GPORTAL_HTML";
 
 // Maximum HTML files and visible items
 #define MAX_HTML_FILES  24
@@ -22,17 +22,16 @@ static const char *TAG = "HTML_SEL";
 
 // Screen user data
 typedef struct {
-    wifi_network_t *networks;
-    int network_count;
+    char ssid[33];
     char html_files[MAX_HTML_FILES][MAX_FILENAME_LEN];
-    int file_ids[MAX_HTML_FILES];  // Store the 1-based IDs from UART
+    int file_ids[MAX_HTML_FILES];
     int file_count;
     int selected_index;
     int scroll_offset;
     bool loading;
-    bool needs_redraw;  // Flag for thread-safe redraw
+    bool needs_redraw;
     screen_t *self;
-} html_select_screen_data_t;
+} global_portal_html_data_t;
 
 // Forward declaration
 static void draw_screen(screen_t *self);
@@ -42,7 +41,7 @@ static void draw_screen(screen_t *self);
  */
 static void uart_line_callback(const char *line, void *user_data)
 {
-    html_select_screen_data_t *data = (html_select_screen_data_t *)user_data;
+    global_portal_html_data_t *data = (global_portal_html_data_t *)user_data;
     if (!data || data->file_count >= MAX_HTML_FILES) return;
     
     // Skip header line
@@ -50,8 +49,7 @@ static void uart_line_callback(const char *line, void *user_data)
         return;
     }
     
-    // Parse lines like "1 PLAY.html" or "16 Starbucks.html"
-    // Format: number space filename.html
+    // Parse lines like "1 PLAY.html"
     const char *ptr = line;
     
     // Skip leading whitespace
@@ -71,7 +69,7 @@ static void uart_line_callback(const char *line, void *user_data)
     while (*ptr && isspace((unsigned char)*ptr)) ptr++;
     
     // Rest is filename - check if it ends with .html
-    if (strlen(ptr) < 6) return;  // At least "x.html"
+    if (strlen(ptr) < 6) return;
     if (strstr(ptr, ".html") == NULL) return;
     
     // Store the file
@@ -90,16 +88,25 @@ static void uart_line_callback(const char *line, void *user_data)
     
     ESP_LOGI(TAG, "Found HTML file [%d]: %s", file_id, data->html_files[data->file_count - 1]);
     
-    // Update loading state - set flag for main task to redraw
+    // Update loading state
     if (data->loading && data->file_count > 0) {
         data->loading = false;
         data->needs_redraw = true;
     }
 }
 
+static void on_tick(screen_t *self)
+{
+    global_portal_html_data_t *data = (global_portal_html_data_t *)self->user_data;
+    if (data && data->needs_redraw) {
+        data->needs_redraw = false;
+        draw_screen(self);
+    }
+}
+
 static void draw_screen(screen_t *self)
 {
-    html_select_screen_data_t *data = (html_select_screen_data_t *)self->user_data;
+    global_portal_html_data_t *data = (global_portal_html_data_t *)self->user_data;
     
     ui_clear();
     
@@ -159,7 +166,7 @@ static void draw_screen(screen_t *self)
     }
 }
 
-static void launch_evil_twin(html_select_screen_data_t *data)
+static void launch_portal(global_portal_html_data_t *data)
 {
     if (data->file_count == 0 || data->selected_index >= data->file_count) {
         return;
@@ -174,124 +181,64 @@ static void launch_evil_twin(html_select_screen_data_t *data)
              data->html_files[data->selected_index], 
              data->file_ids[data->selected_index]);
     
-    // Send start_evil_twin command
-    uart_send_command("start_evil_twin");
+    // Send start_portal command with SSID
+    char portal_cmd[64];
+    snprintf(portal_cmd, sizeof(portal_cmd), "start_portal %s", data->ssid);
+    uart_send_command(portal_cmd);
     
-    // Create evil twin screen params
-    evil_twin_screen_params_t *params = malloc(sizeof(evil_twin_screen_params_t));
+    // Create portal running screen params
+    global_portal_params_t *params = malloc(sizeof(global_portal_params_t));
     if (params) {
-        // Copy networks to evil twin screen
-        params->networks = malloc(data->network_count * sizeof(wifi_network_t));
-        params->count = data->network_count;
-        
-        if (params->networks) {
-            memcpy(params->networks, data->networks, 
-                   data->network_count * sizeof(wifi_network_t));
-            screen_manager_push(evil_twin_screen_create, params);
-        } else {
-            free(params);
-        }
-    }
-}
-
-static void on_tick(screen_t *self)
-{
-    html_select_screen_data_t *data = (html_select_screen_data_t *)self->user_data;
-    
-    // Check if redraw needed from UART callback (thread-safe)
-    if (data->needs_redraw) {
-        data->needs_redraw = false;
-        draw_screen(self);
+        strncpy(params->ssid, data->ssid, sizeof(params->ssid) - 1);
+        params->ssid[sizeof(params->ssid) - 1] = '\0';
+        screen_manager_push(global_portal_screen_create, params);
     }
 }
 
 static void on_key(screen_t *self, key_code_t key)
 {
-    html_select_screen_data_t *data = (html_select_screen_data_t *)self->user_data;
+    global_portal_html_data_t *data = (global_portal_html_data_t *)self->user_data;
     
-    // Also check on key press for faster response
-    on_tick(self);
+    // Check if redraw needed from UART callback
+    if (data->needs_redraw) {
+        data->needs_redraw = false;
+        draw_screen(self);
+    }
     
     switch (key) {
         case KEY_UP:
             if (!data->loading && data->selected_index > 0) {
-                int old_idx = data->selected_index;
                 data->selected_index--;
                 
                 // Scroll up if needed
                 if (data->selected_index < data->scroll_offset) {
                     data->scroll_offset = data->selected_index;
-                    draw_screen(self);
-                } else {
-                    // Just redraw the two affected rows
-                    int start_row = 1;
-                    int old_row = old_idx - data->scroll_offset;
-                    int new_row = data->selected_index - data->scroll_offset;
-                    
-                    if (old_row >= 0 && old_row < VISIBLE_ITEMS) {
-                        char label[28];
-                        strncpy(label, data->html_files[old_idx], sizeof(label) - 1);
-                        label[sizeof(label) - 1] = '\0';
-                        char *ext = strstr(label, ".html");
-                        if (ext) *ext = '\0';
-                        ui_draw_menu_item(start_row + old_row, label, false, false, false);
-                    }
-                    if (new_row >= 0 && new_row < VISIBLE_ITEMS) {
-                        char label[28];
-                        strncpy(label, data->html_files[data->selected_index], sizeof(label) - 1);
-                        label[sizeof(label) - 1] = '\0';
-                        char *ext = strstr(label, ".html");
-                        if (ext) *ext = '\0';
-                        ui_draw_menu_item(start_row + new_row, label, true, false, false);
-                    }
                 }
+                draw_screen(self);
             }
             break;
             
         case KEY_DOWN:
             if (!data->loading && data->selected_index < data->file_count - 1) {
-                int old_idx = data->selected_index;
                 data->selected_index++;
                 
                 // Scroll down if needed
                 if (data->selected_index >= data->scroll_offset + VISIBLE_ITEMS) {
                     data->scroll_offset = data->selected_index - VISIBLE_ITEMS + 1;
-                    draw_screen(self);
-                } else {
-                    // Just redraw the two affected rows
-                    int start_row = 1;
-                    int old_row = old_idx - data->scroll_offset;
-                    int new_row = data->selected_index - data->scroll_offset;
-                    
-                    if (old_row >= 0 && old_row < VISIBLE_ITEMS) {
-                        char label[28];
-                        strncpy(label, data->html_files[old_idx], sizeof(label) - 1);
-                        label[sizeof(label) - 1] = '\0';
-                        char *ext = strstr(label, ".html");
-                        if (ext) *ext = '\0';
-                        ui_draw_menu_item(start_row + old_row, label, false, false, false);
-                    }
-                    if (new_row >= 0 && new_row < VISIBLE_ITEMS) {
-                        char label[28];
-                        strncpy(label, data->html_files[data->selected_index], sizeof(label) - 1);
-                        label[sizeof(label) - 1] = '\0';
-                        char *ext = strstr(label, ".html");
-                        if (ext) *ext = '\0';
-                        ui_draw_menu_item(start_row + new_row, label, true, false, false);
-                    }
                 }
+                draw_screen(self);
             }
             break;
             
         case KEY_ENTER:
         case KEY_SPACE:
             if (!data->loading && data->file_count > 0) {
-                launch_evil_twin(data);
+                launch_portal(data);
             }
             break;
             
         case KEY_ESC:
-        case KEY_Q:
+        case KEY_BACKSPACE:
             screen_manager_pop();
             break;
             
@@ -302,49 +249,41 @@ static void on_key(screen_t *self, key_code_t key)
 
 static void on_destroy(screen_t *self)
 {
-    html_select_screen_data_t *data = (html_select_screen_data_t *)self->user_data;
-    
     // Clear UART callback
     uart_clear_line_callback();
     
-    if (data) {
-        if (data->networks) {
-            free(data->networks);
-        }
-        free(data);
+    if (self->user_data) {
+        free(self->user_data);
     }
 }
 
-screen_t* html_select_screen_create(void *params)
+screen_t* global_portal_html_screen_create(void *params)
 {
-    html_select_screen_params_t *html_params = (html_select_screen_params_t *)params;
+    global_portal_html_params_t *html_params = (global_portal_html_params_t *)params;
     
     if (!html_params) {
         ESP_LOGE(TAG, "Invalid parameters");
         return NULL;
     }
     
-    ESP_LOGI(TAG, "Creating HTML select screen...");
+    ESP_LOGI(TAG, "Creating global portal HTML screen for SSID: %s", html_params->ssid);
     
     screen_t *screen = screen_alloc();
     if (!screen) {
-        if (html_params->networks) free(html_params->networks);
         free(html_params);
         return NULL;
     }
     
     // Allocate user data
-    html_select_screen_data_t *data = calloc(1, sizeof(html_select_screen_data_t));
+    global_portal_html_data_t *data = calloc(1, sizeof(global_portal_html_data_t));
     if (!data) {
         free(screen);
-        if (html_params->networks) free(html_params->networks);
         free(html_params);
         return NULL;
     }
     
-    // Take ownership
-    data->networks = html_params->networks;
-    data->network_count = html_params->network_count;
+    // Copy SSID
+    strncpy(data->ssid, html_params->ssid, sizeof(data->ssid) - 1);
     data->loading = true;
     data->self = screen;
     free(html_params);
@@ -364,7 +303,8 @@ screen_t* html_select_screen_create(void *params)
     // Draw initial screen (loading state)
     draw_screen(screen);
     
-    ESP_LOGI(TAG, "HTML select screen created");
+    ESP_LOGI(TAG, "Global portal HTML screen created");
     return screen;
 }
+
 
