@@ -15,6 +15,8 @@
 #include "screen_manager.h"
 #include "home_screen.h"
 
+#define JANOS_ADV_VERSION "1.0.0"
+
 static const char *TAG = "MAIN";
 
 void app_main(void)

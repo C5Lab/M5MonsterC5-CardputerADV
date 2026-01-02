@@ -23,3 +23,5 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # Log Level
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+# Allow orphan sections to be reported as warnings (fixes .init from toolchain)
+CONFIG_COMPILER_ORPHAN_SECTIONS_WARNING=y

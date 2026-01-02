@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JanOS_ADV Web Flasher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0f1c;
+      --card: #10182a;
+      --accent: #40f0ff;
+      --accent-2: #ff7bd4;
+      --text: #e8f1ff;
+      --muted: #9db2d4;
+      --border: rgba(255, 255, 255, 0.08);
+      --success: #5af29e;
+      --error: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Space Grotesk", system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at 20% 20%, rgba(64, 240, 255, 0.06), transparent 30%),
+                  radial-gradient(circle at 80% 0%, rgba(255, 123, 212, 0.08), transparent 30%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 32px 18px 64px;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+    header {
+      background: linear-gradient(135deg, rgba(64, 240, 255, 0.08), rgba(255, 123, 212, 0.05));
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 24px 24px 28px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+    }
+    header .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 12px 0 10px;
+      font-size: clamp(32px, 4vw, 44px);
+      letter-spacing: -0.02em;
+    }
+    header p {
+      margin: 0;
+      max-width: 760px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.35);
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      letter-spacing: 0.01em;
+    }
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    select {
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      appearance: none;
+    }
+    select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(64,240,255,0.2);
+    }
+    button {
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 12px 18px;
+      border-radius: 12px;
+      font-weight: 600;
+      color: #0a0f1c;
+      background: linear-gradient(135deg, var(--accent), #56a0ff);
+      box-shadow: 0 12px 32px rgba(64, 240, 255, 0.3);
+      transition: transform 0.08s ease, box-shadow 0.12s ease, opacity 0.2s;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    button:hover:not(:disabled) { transform: translateY(-1px); }
+    .ghost {
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      box-shadow: inset 0 0 0 1px var(--border);
+    }
+    .status-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .pill strong { color: var(--text); }
+    .log {
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      min-height: 140px;
+      max-height: 240px;
+      overflow-y: auto;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      color: #b8c7e6;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .progress {
+      width: 100%;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.05);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      margin-top: 10px;
+    }
+    .progress span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      transition: width 0.12s ease;
+    }
+    .split {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 14px;
+    }
+    .steps {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .steps li {
+      list-style: none;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      background: rgba(90, 242, 158, 0.12);
+      color: var(--success);
+      font-size: 12px;
+      border: 1px solid rgba(90, 242, 158, 0.4);
+    }
+    .error { color: var(--error); }
+    .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    footer {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+    footer a { color: inherit; text-decoration: none; border-bottom: 1px solid transparent; }
+    footer a:hover { border-bottom-color: currentColor; }
+    @media (max-width: 980px) {
+      body { padding: 20px 14px 60px; }
+      .split { grid-template-columns: 1fr; }
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="eyebrow">JanOS_ADV ESP32-S3</div>
+      <h1>Flash JanOS_ADV straight from your browser</h1>
+      <p>WebSerial flasher powered by esptool-js. Click Connect, pick the M5MonsterC5-CardputerADV serial port (Chrome/Edge desktop), then Flash to stream bootloader, partition table, and firmware from the latest GitHub Release.</p>
+    </header>
+
+    <div class="split">
+      <div class="card">
+        <h2>Control</h2>
+        <div class="controls">
+          <div class="actions">
+            <button id="connectBtn">Connect</button>
+            <button id="flashBtn" class="ghost" disabled>Flash</button>
+            <select id="branchSelect" aria-label="Branch">
+              <option value="main" selected>Main</option>
+              <option value="development">Development</option>
+            </select>
+            <select id="baudSelect" aria-label="Baud rate">
+              <option value="460800">460800 baud</option>
+              <option value="921600">921600 baud</option>
+              <option value="115200">115200 baud</option>
+            </select>
+          </div>
+          <div class="status-line">
+            <span id="statusText">Ready to connect.</span>
+            <span id="chipText" class="pill" style="display:none;"></span>
+            <span id="manifestText" class="pill" style="display:none;"></span>
+          </div>
+          <div class="progress" aria-label="Flash progress">
+            <span id="progressBar"></span>
+          </div>
+          <div class="log" id="log"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Release info</h2>
+        <p id="releaseInfo">Loading manifest</p>
+        <div class="steps">
+          <li><strong>ROM mode:</strong> Hold BOOT on the M5MonsterC5-CardputerADV, plug the board in, then release.</li>
+          <li><strong>Close serial hogs:</strong> quit qFlipper/monitors or anything holding the COM port.</li>
+          <li><strong>Stuck-</strong> Unplug, re-run Connect, plug again with BOOT held, then Flash.</li>
+          <li><strong>Reset:</strong> after flashing, press RESET on the board if it does not auto-reboot.</li>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>What happens</h2>
+        <p>Using esptool-js directly: enter stub, set baud, then flash each image at the offsets from <code>manifest.json</code>. Progress and MD5 checks mirror the Python esptool flow.</p>
+      </div>
+      <div class="card">
+        <h2>Need offline?</h2>
+        <p>Grab the same assets from Releases and flash with esptool if your browser blocks Web Serial.</p>
+        <pre class="mono">python -m esptool --chip esp32s3 -b 460800 --before default-reset --after hard-reset write-flash --flash-mode dio --flash-size 4MB --flash-freq 80m 0x0 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 build/M5MonsterC5-CardputerADV.bin</pre>
+      </div>
+      <div class="card">
+        <h2>Browser support</h2>
+        <p>Chrome or Edge on desktop over HTTPS. Web Serial is required. If you see Web Serial not available, switch browsers.</p>
+      </div>
+    </div>
+  </div>
+  <footer>
+    M5MonsterC5-CardputerADV -
+    <span id="pageVersion" class="mono">Web flasher v1.0.0</span>.
+  </footer>
+
+  <script type="module">
+    import { ESPLoader, Transport } from "https://unpkg.com/esptool-js/bundle.js";
+
+    const ui = {
+      status: document.getElementById("statusText"),
+      chip: document.getElementById("chipText"),
+      manifest: document.getElementById("manifestText"),
+      log: document.getElementById("log"),
+      progress: document.getElementById("progressBar"),
+      connectBtn: document.getElementById("connectBtn"),
+      flashBtn: document.getElementById("flashBtn"),
+      baud: document.getElementById("baudSelect"),
+      branch: document.getElementById("branchSelect"),
+      releaseInfo: document.getElementById("releaseInfo"),
+      pageVersion: document.getElementById("pageVersion"),
+    };
+
+    const state = {
+      manifest: null,
+      latestRelease: null,
+      files: [],
+      port: null,
+      onDisconnect: null,
+      transport: null,
+      esploader: null,
+      chip: null,
+      connected: false,
+      isFlashing: false,
+      autoFlash: false,
+      autoFlashTriggered: false,
+    };
+
+    const PAGE_VERSION = "1.0.0";
+
+    const setFooterVersion = (manifest) => {
+      if (!ui.pageVersion) return;
+      if (!manifest) {
+        ui.pageVersion.textContent = `Web flasher v${PAGE_VERSION}`;
+        return;
+      }
+      const build = manifest.build || "n/a";
+      const label = manifest.version || "n/a";
+      const branch = getBranch();
+      ui.pageVersion.textContent = `Web flasher v${PAGE_VERSION} - Build ${build} - ${label} - ${branch}`;
+    };
+
+    const applyQueryParams = () => {
+      const params = new URLSearchParams(window.location.search);
+      const branch = params.get("branch");
+      if(branch) {
+        const normalized = branch.trim().toLowerCase();
+        if(normalized === "dev") {
+          ui.branch.value = "development";
+        } else if(normalized === "main") {
+          ui.branch.value = "main";
+        } else if(normalized === "development") {
+          ui.branch.value = "development";
+        }
+      }
+      const auto = params.get("auto") || params.get("autoflash");
+      if(auto) {
+        const normalized = auto.trim().toLowerCase();
+        state.autoFlash = normalized === "1" || normalized === "true" || normalized === "yes";
+      }
+    };
+
+    const log = (msg) => {
+      const time = new Date().toLocaleTimeString();
+      const lines = Array.isArray(msg) ? msg : [msg];
+      for (const line of lines) {
+        ui.log.textContent += `[${time}] ${line}\n`;
+      }
+      ui.log.scrollTop = ui.log.scrollHeight;
+    };
+
+    const setStatus = (text, level = "info") => {
+      ui.status.textContent = text;
+      if (level === "error") {
+        ui.status.classList.add("error");
+      } else {
+        ui.status.classList.remove("error");
+      }
+    };
+
+    const bufferToBinaryString = (buffer) => {
+      const bytes = new Uint8Array(buffer);
+      const chunk = 0x8000;
+      let result = "";
+      for (let i = 0; i < bytes.length; i += chunk) {
+        result += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      return result;
+    };
+
+    const getRepoSlug = () => {
+      const host = window.location.hostname;
+      if (!host.endsWith("github.io")) return null;
+      const owner = host.split(".")[0];
+      const parts = window.location.pathname.split("/").filter(Boolean);
+      if (!parts.length) return null;
+      return `${owner}/${parts[0]}`;
+    };
+
+    const resolveManifestPath = (path) => {
+      if (!path) return path;
+      try {
+        const parsed = new URL(path);
+        if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+          return path;
+        }
+      } catch {}
+      let cleaned = path.startsWith("/") ? path.slice(1) : path;
+      const branch = getBranch();
+      if (branch === "main") return cleaned;
+      const repo = getRepoSlug();
+      if (!repo) return cleaned;
+      if (cleaned.startsWith("firmware/")) {
+        cleaned = cleaned.replace(/^firmware\//, "binaries-esp32s3/");
+      }
+      return `https://raw.githubusercontent.com/${repo}/${branch}/${cleaned}`;
+    };
+
+    const getBranch = () => ui.branch.value || "main";
+
+    const getManifestUrl = () => {
+      const branch = getBranch();
+      if (branch === "main") return "manifest.json";
+      const repo = getRepoSlug();
+      if (!repo) return "manifest.json";
+      return `https://raw.githubusercontent.com/${repo}/${branch}/docs/manifest.json`;
+    };
+
+    const rewritePartsForBranch = (manifest, branch) => {
+      if (!manifest || !Array.isArray(manifest.parts)) return manifest;
+      if (!branch || branch === "main") return manifest;
+      const repo = getRepoSlug();
+      if (!repo) return manifest;
+      const prefix = `https://raw.githubusercontent.com/${repo}/main/`;
+      const next = { ...manifest };
+      next.parts = manifest.parts.map((part) => {
+        if (!part || !part.path) return part;
+        const replaced = part.path.replace(
+          prefix,
+          `https://raw.githubusercontent.com/${repo}/${branch}/`
+        );
+        return { ...part, path: replaced };
+      });
+      return next;
+    };
+
+    const fetchLatestRelease = async () => {
+      const repo = getRepoSlug();
+      if (!repo) throw new Error("Cannot resolve repository slug");
+      const apiUrl = `https://api.github.com/repos/${repo}/releases/latest`;
+      const res = await fetch(apiUrl, { cache: "no-store" });
+      if (!res.ok) throw new Error(`GitHub release fetch failed: ${res.status} ${res.statusText}`);
+      return res.json();
+    };
+
+    const loadManifest = async () => {
+      try {
+        const manifestUrl = getManifestUrl();
+        const res = await fetch(manifestUrl, { cache: "no-store" });
+        if (!res.ok) throw new Error("Manifest fetch failed");
+        const manifestRaw = await res.json();
+        const manifest = rewritePartsForBranch(manifestRaw, getBranch());
+        state.manifest = manifest;
+        let releaseLabel = manifest.version || "n/a";
+        if (getBranch() === "main") {
+          try {
+            const release = await fetchLatestRelease();
+            state.latestRelease = release;
+            releaseLabel = release.tag_name || release.name || releaseLabel;
+          } catch (err) {
+            console.warn(err);
+          }
+        }
+        ui.manifest.style.display = "inline-flex";
+        ui.manifest.textContent = `Build ${manifest.build || "n/a"} - ${releaseLabel} - ${getBranch()}`;
+        setFooterVersion({ ...manifest, version: releaseLabel });
+        const files = (manifest.parts || []).length;
+        const releaseText = state.latestRelease ? ` - latest ${releaseLabel}` : "";
+        ui.releaseInfo.innerHTML = `<span class="badge">Manifest</span> ${manifest.name || "M5MonsterC5-CardputerADV"}${releaseText} - ${files} file(s) - chip ${manifest.chipFamily || "ESP32-S3"} - ${getBranch()}`;
+        setStatus("Manifest loaded.");
+      } catch (err) {
+        setStatus("Manifest not found. Publish a release first.", "error");
+        ui.releaseInfo.textContent = "No manifest available.";
+        setFooterVersion(null);
+        throw err;
+      }
+    };
+
+    const ensureSupport = () => {
+      if (!("serial" in navigator)) {
+        setStatus("Web Serial not available. Use Chrome/Edge over HTTPS.", "error");
+        throw new Error("Web Serial unavailable");
+      }
+    };
+
+    const connect = async () => {
+      ensureSupport();
+      if (state.connected) {
+        await disconnect();
+        return;
+      }
+      ui.connectBtn.disabled = true;
+      ui.flashBtn.disabled = true;
+      setStatus("Requesting serial port");
+      log("Requesting port access");
+      try {
+        state.port = await navigator.serial.requestPort({});
+        state.onDisconnect = () => {
+          log("Device disconnected.");
+          disconnect().catch(() => {});
+          setStatus("Device disconnected. Reconnect to flash.", "error");
+        };
+        try {
+          state.port.addEventListener("disconnect", state.onDisconnect);
+        } catch {}
+        const baud = parseInt(ui.baud.value, 10);
+        state.transport = new Transport(state.port, true);
+        const loaderOptions = {
+          transport: state.transport,
+          baudrate: baud,
+          terminal: {
+            clean() {},
+            writeLine(data) { log(data); },
+            write(data) { log(data); },
+          },
+          debugLogging: false,
+        };
+        state.esploader = new ESPLoader(loaderOptions);
+        setStatus("Syncing with chip (hold BOOT + RESET to enter ROM)");
+        log("Syncing with chip");
+        state.chip = await state.esploader.main();
+        state.connected = true;
+        ui.chip.style.display = "inline-flex";
+        ui.chip.textContent = `Chip ${state.chip}`;
+        ui.connectBtn.textContent = "Disconnect";
+        setStatus(`Connected to ${state.chip}. Ready to flash.`);
+        log(`Connected: ${state.chip}`);
+        ui.flashBtn.disabled = false;
+
+        if(state.autoFlash && !state.autoFlashTriggered && !state.isFlashing) {
+          state.autoFlashTriggered = true;
+          flash().catch((err) => log(`Auto flash failed: ${err.message || err}`));
+        }
+      } catch (err) {
+        console.error(err);
+        setStatus(err.message || "Connection failed", "error");
+        log(`Error: ${err.message || err}`);
+        await disconnect();
+        throw err;
+      } finally {
+        ui.connectBtn.disabled = false;
+      }
+    };
+
+    const resolveAssetUrl = async (url) => {
+      let parsed;
+      try {
+        parsed = new URL(url);
+      } catch {
+        const res = await fetch(url, { cache: "no-store", redirect: "follow" });
+        if (!res.ok) throw new Error(`Fetch ${url} failed (${res.status} ${res.statusText})`);
+        return { buf: await res.arrayBuffer(), usedUrl: url };
+      }
+
+      if (!parsed.hostname.includes("github.com")) {
+        const res = await fetch(url, { cache: "no-store", redirect: "follow" });
+        if (!res.ok) throw new Error(`Fetch ${url} failed (${res.status} ${res.statusText})`);
+        return { buf: await res.arrayBuffer(), usedUrl: url };
+      }
+
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      if (parts.length < 2) throw new Error(`Cannot parse owner/repo from ${url}`);
+      const owner = parts[0];
+      const repo = parts[1];
+      const assetName = parts[parts.length - 1];
+
+      const apiUrl = `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
+      const apiRes = await fetch(apiUrl, { cache: "no-store" });
+      if (!apiRes.ok) throw new Error(`GitHub API failed for ${assetName}: ${apiRes.status} ${apiRes.statusText}`);
+      const release = await apiRes.json();
+      const asset = (release.assets || []).find((a) => a.name === assetName);
+      if (!asset) throw new Error(`Asset ${assetName} not found in latest release`);
+
+      const downloadRes = await fetch(asset.url, {
+        cache: "no-store",
+        redirect: "follow",
+        headers: { Accept: "application/octet-stream" },
+      });
+      if (!downloadRes.ok) throw new Error(`Download failed for ${assetName}: ${downloadRes.status} ${downloadRes.statusText}`);
+      return { buf: await downloadRes.arrayBuffer(), usedUrl: asset.browser_download_url || asset.url };
+    };
+
+    const fetchFiles = async () => {
+      if (!state.manifest) await loadManifest();
+      const parts = state.manifest.parts || [];
+      const files = [];
+      for (const part of parts) {
+        const url = resolveManifestPath(part.path);
+        setStatus(`Downloading ${url}...`);
+        log(`Fetching ${url} @ 0x${part.offset.toString(16)}`);
+        const { buf, usedUrl } = await resolveAssetUrl(url);
+        log(`Fetched ${usedUrl}`);
+        files.push({ data: bufferToBinaryString(buf), address: part.offset });
+      }
+      return files;
+    };
+
+const flash = async () => {
+      ensureSupport();
+      if (!state.esploader) {
+        await connect();
+      }
+      ui.flashBtn.disabled = true;
+      ui.connectBtn.disabled = true;
+      state.isFlashing = true;
+      ui.progress.style.width = "0%";
+      try {
+        const files = await fetchFiles();
+        setStatus("Uploading stub and flashing");
+        log("Preparing flash writes");
+        const flashOptions = {
+          fileArray: files,
+          flashSize: "4MB",
+          eraseAll: false,
+          compress: true,
+          reportProgress: (fileIndex, written, total) => {
+            const pct = Math.min(100, Math.round((written / total) * 100));
+            ui.progress.style.width = `${pct}%`;
+            setStatus(`Flashing ${fileIndex + 1}/${files.length}  ${pct}%`);
+          },
+          calculateMD5Hash: (image) => CryptoJS.MD5(CryptoJS.enc.Latin1.parse(image)),
+        };
+        await state.esploader.writeFlash(flashOptions);
+        await state.esploader.after();
+        ui.progress.style.width = "100%";
+        setStatus("Flash complete. Press RESET if the board doesn't reboot.");
+        log("Flash complete.");
+      } catch (err) {
+        console.error(err);
+        setStatus(err.message || "Flash failed", "error");
+        log(`Error: ${err.message || err}`);
+      } finally {
+        state.isFlashing = false;
+        ui.flashBtn.disabled = false;
+        ui.connectBtn.disabled = false;
+      }
+    };
+
+    const disconnect = async () => {
+      if (state.port && state.onDisconnect) {
+        try { state.port.removeEventListener("disconnect", state.onDisconnect); } catch {}
+      }
+      try {
+        if (state.transport) {
+          await state.transport.disconnect();
+        } else if (state.port && state.port.close) {
+          await state.port.close();
+        }
+      } catch {}
+      state.port = null;
+      state.onDisconnect = null;
+      state.transport = null;
+      state.esploader = null;
+      state.chip = null;
+      state.connected = false;
+      ui.chip.style.display = "none";
+      ui.flashBtn.disabled = true;
+      ui.connectBtn.textContent = "Connect";
+      setStatus("Disconnected.");
+    };
+
+    ui.connectBtn.addEventListener("click", () => connect().catch(() => {}));
+    ui.flashBtn.addEventListener("click", () => flash().catch(() => {}));
+    ui.branch.addEventListener("change", () => {
+      state.manifest = null;
+      ui.manifest.style.display = "none";
+      ui.manifest.textContent = "";
+      ui.releaseInfo.textContent = "Loading manifest";
+      loadManifest().catch(() => {});
+    });
+
+    applyQueryParams();
+    loadManifest().catch(() => {});
+  </script>
+</body>
+</html>
