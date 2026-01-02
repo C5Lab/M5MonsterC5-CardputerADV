@@ -15,8 +15,9 @@
 #include "screen_manager.h"
 #include "home_screen.h"
 #include "screenshot.h"
+#include "battery.h"
 
-#define JANOS_ADV_VERSION "1.0.1"
+#define JANOS_ADV_VERSION "1.0.3"
 
 static const char *TAG = "MAIN";
 
@@ -32,6 +33,16 @@ void app_main(void)
         return;
     }
     ESP_LOGI(TAG, "Display initialized successfully");
+
+    // Initialize battery monitoring
+    ESP_LOGI(TAG, "Initializing battery monitoring...");
+    ret = battery_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Battery monitoring initialization failed - battery indicator disabled");
+        // Continue anyway - battery monitoring is optional
+    } else {
+        ESP_LOGI(TAG, "Battery monitoring initialized successfully");
+    }
 
     // Initialize screenshot module (SD card)
     ESP_LOGI(TAG, "Initializing screenshot module...");

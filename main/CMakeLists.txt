@@ -6,6 +6,7 @@ idf_component_register(
         "drivers/display.c"
         "drivers/keyboard.c"
         "drivers/screenshot.c"
+        "drivers/battery.c"
         "ui/text_ui.c"
         "screens/home_screen.c"
         "screens/wifi_scan_screen.c"
@@ -55,4 +56,5 @@ idf_component_register(
         fatfs
         vfs
         sdmmc
+        esp_adc
 )

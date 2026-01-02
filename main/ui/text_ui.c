@@ -5,7 +5,9 @@
 
 #include "text_ui.h"
 #include "font8x16.h"
+#include "battery.h"
 #include <string.h>
+#include <stdio.h>
 
 void ui_init(void)
 {
@@ -105,16 +107,84 @@ void ui_draw_line(int row, uint16_t color)
     display_draw_hline(0, y, DISPLAY_WIDTH, color);
 }
 
+/**
+ * @brief Draw battery icon with level indicator
+ * @param x X position (right edge of icon)
+ * @param y Y position
+ * @param level Battery level 0-100
+ * @param bg Background color
+ */
+static void draw_battery_icon(int x, int y, int level, uint16_t bg)
+{
+    // Battery icon dimensions
+    const int bat_width = 18;
+    const int bat_height = 10;
+    const int tip_width = 2;
+    const int tip_height = 4;
+    
+    // Determine color based on level
+    uint16_t fill_color;
+    if (level > 50) {
+        fill_color = COLOR_GREEN;
+    } else if (level > 20) {
+        fill_color = COLOR_YELLOW;
+    } else {
+        fill_color = COLOR_RED;
+    }
+    
+    // Battery body position (icon drawn from right edge)
+    int bx = x - bat_width - tip_width;
+    int by = y;
+    
+    // Draw battery body outline
+    display_draw_rect(bx, by, bat_width, bat_height, UI_COLOR_TEXT);
+    
+    // Draw battery tip (positive terminal)
+    int tip_y = by + (bat_height - tip_height) / 2;
+    display_fill_rect(bx + bat_width, tip_y, tip_width, tip_height, UI_COLOR_TEXT);
+    
+    // Clear inside of battery
+    display_fill_rect(bx + 1, by + 1, bat_width - 2, bat_height - 2, bg);
+    
+    // Draw fill level (inside battery body)
+    int fill_width = ((bat_width - 4) * level) / 100;
+    if (fill_width > 0) {
+        display_fill_rect(bx + 2, by + 2, fill_width, bat_height - 4, fill_color);
+    }
+    
+    // Draw percentage text to the left of battery icon
+    // Clamp level to valid range to satisfy compiler
+    int display_level = (level < 0) ? 0 : (level > 100) ? 100 : level;
+    char pct_str[8];
+    snprintf(pct_str, sizeof(pct_str), "%d%%", display_level);
+    int text_len = strlen(pct_str);
+    int text_x = bx - (text_len * FONT_WIDTH) - 2;
+    
+    // Use smaller positioning for percentage (vertically centered)
+    ui_draw_text(text_x, y - 2, pct_str, UI_COLOR_DIMMED, bg);
+}
+
 void ui_draw_title(const char *title)
 {
+    uint16_t title_bg = RGB565(0, 60, 30);
+    
     // Draw title bar background
-    display_fill_rect(0, 0, DISPLAY_WIDTH, FONT_HEIGHT + 2, RGB565(0, 60, 30));
+    display_fill_rect(0, 0, DISPLAY_WIDTH, FONT_HEIGHT + 2, title_bg);
     
     // Draw title text centered
     if (title) {
         int len = strlen(title);
         int x = (DISPLAY_WIDTH - len * FONT_WIDTH) / 2;
-        ui_draw_text(x, 1, title, UI_COLOR_TITLE, RGB565(0, 60, 30));
+        ui_draw_text(x, 1, title, UI_COLOR_TITLE, title_bg);
+    }
+    
+    // Draw battery indicator on the right side
+    if (battery_is_available()) {
+        int level = battery_get_level();
+        if (level >= 0) {
+            // Position battery icon at right edge with some margin
+            draw_battery_icon(DISPLAY_WIDTH - 4, 4, level, title_bg);
+        }
     }
     
     // Draw bottom line
