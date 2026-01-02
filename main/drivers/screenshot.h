@@ -6,6 +6,8 @@
 #ifndef SCREENSHOT_H
 #define SCREENSHOT_H
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 /**
