@@ -8,6 +8,7 @@
 #include "global_attacks_screen.h"
 #include "sniff_karma_menu_screen.h"
 #include "bt_menu_screen.h"
+#include "deauth_detector_screen.h"
 #include "placeholder_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -26,7 +27,7 @@ static const menu_item_t menu_items[] = {
     {"WiFi Scan & Attack", wifi_scan_screen_create, NULL},
     {"Global WiFi Attacks", global_attacks_screen_create, NULL},
     {"WiFi Sniff&Karma", sniff_karma_menu_screen_create, NULL},
-    {"WiFi Monitor", NULL, "WiFi Monitor"},
+    {"Deauth Detector", deauth_detector_screen_create, NULL},
     {"Bluetooth", bt_menu_screen_create, NULL},
 };
 
