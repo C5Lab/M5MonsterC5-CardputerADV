@@ -87,12 +87,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! command -v pip3 >/dev/null 2>&1; then
+          if ! python3 -c "import venv" >/dev/null 2>&1; then
             apt-get update
-            apt-get install -y python3-pip
+            apt-get install -y python3-venv
           fi
-          pip3 install --no-cache-dir esptool
-          python -m esptool --chip esp32s3 merge_bin -o "binaries-esp32s3/M5MonsterC5-CardputerADV-full-${{ steps.version.outputs.version }}.bin" \
+          python3 -m venv /tmp/esptool-venv
+          /tmp/esptool-venv/bin/python -m pip install --no-cache-dir esptool
+          /tmp/esptool-venv/bin/python -m esptool --chip esp32s3 merge_bin -o "binaries-esp32s3/M5MonsterC5-CardputerADV-full-${{ steps.version.outputs.version }}.bin" \
             --flash_mode dio --flash_freq 80m --flash_size 4MB \
             0x0 "binaries-esp32s3/bootloader.bin" \
             0x8000 "binaries-esp32s3/partition-table.bin" \
