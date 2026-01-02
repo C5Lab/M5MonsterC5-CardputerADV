@@ -30,6 +30,10 @@ typedef struct {
     bool loading;
     bool needs_redraw;
     screen_t *self;
+    // Deauth pending state - waiting for scan results to get network index
+    bool pending_deauth;                        // Whether we're waiting for scan results
+    char deauth_mac[18];                        // MAC address to deauth
+    char deauth_ssid[MAX_SSID_LEN];             // SSID to find in scan results
 } sniffer_results_data_t;
 
 // Forward declaration
@@ -134,18 +138,133 @@ static void extract_mac(const char *line, char *mac, size_t mac_len)
 }
 
 /**
+ * @brief Check if line is a scan result CSV line
+ * Format: "1","SSID","","BSSID","CH","Security","RSSI","Band"
+ */
+static bool is_scan_result_line(const char *line)
+{
+    // Must start with a quote and digit
+    if (line[0] != '"') return false;
+    if (!isdigit((unsigned char)line[1])) return false;
+    return true;
+}
+
+/**
+ * @brief Parse scan result CSV line and extract index and SSID
+ * Format: "1","SSID","","BSSID","CH","Security","RSSI","Band"
+ * @return network index if successful, -1 on failure
+ */
+static int parse_scan_result_line(const char *line, char *ssid_out, size_t ssid_len)
+{
+    if (!is_scan_result_line(line)) return -1;
+    
+    // Parse index (first quoted field)
+    const char *p = line + 1;  // Skip opening quote
+    int index = atoi(p);
+    if (index <= 0) return -1;
+    
+    // Find second quoted field (SSID)
+    // Skip to first comma after index
+    p = strchr(p, ',');
+    if (!p) return -1;
+    p++;  // Skip comma
+    
+    // Skip opening quote of SSID field
+    if (*p != '"') return -1;
+    p++;
+    
+    // Find closing quote of SSID
+    const char *ssid_end = strchr(p, '"');
+    if (!ssid_end) return -1;
+    
+    // Copy SSID
+    size_t len = ssid_end - p;
+    if (len >= ssid_len) len = ssid_len - 1;
+    strncpy(ssid_out, p, len);
+    ssid_out[len] = '\0';
+    
+    return index;
+}
+
+/**
+ * @brief Execute deauth sequence after finding network index
+ */
+static void execute_deauth_sequence(sniffer_results_data_t *data, int network_index)
+{
+    ESP_LOGI(TAG, "Executing deauth: network=%d, station=%s", network_index, data->deauth_mac);
+    
+    // Send stop first
+    uart_send_command("stop");
+    
+    // Select the network by index
+    char select_net_cmd[32];
+    snprintf(select_net_cmd, sizeof(select_net_cmd), "select_networks %d", network_index);
+    uart_send_command(select_net_cmd);
+    
+    // Select the station
+    char select_sta_cmd[64];
+    snprintf(select_sta_cmd, sizeof(select_sta_cmd), "select_stations %s", data->deauth_mac);
+    uart_send_command(select_sta_cmd);
+    
+    // Start deauth
+    uart_send_command("start_deauth");
+    
+    // Create params for station deauth screen
+    station_deauth_params_t *params = calloc(1, sizeof(station_deauth_params_t));
+    if (params) {
+        strncpy(params->mac, data->deauth_mac, sizeof(params->mac) - 1);
+        strncpy(params->ssid, data->deauth_ssid, sizeof(params->ssid) - 1);
+        
+        // Clear pending state before pushing new screen
+        data->pending_deauth = false;
+        
+        // Push deauth screen
+        screen_manager_push(station_deauth_screen_create, params);
+    } else {
+        data->pending_deauth = false;
+    }
+}
+
+/**
  * @brief UART line callback for parsing results
  */
 static void uart_line_callback(const char *line, void *user_data)
 {
     sniffer_results_data_t *data = (sniffer_results_data_t *)user_data;
-    if (!data || data->line_count >= MAX_LINES) return;
+    if (!data) return;
     
     // Skip empty lines
     if (strlen(line) == 0) return;
     
     // Skip ESP log lines
     if (is_esp_log_line(line)) return;
+    
+    // If we're waiting for scan results to find network index for deauth
+    if (data->pending_deauth) {
+        // Try to parse as scan result line
+        char parsed_ssid[MAX_SSID_LEN];
+        int network_index = parse_scan_result_line(line, parsed_ssid, sizeof(parsed_ssid));
+        
+        if (network_index > 0) {
+            // Check if this SSID matches the one we're looking for
+            if (strcmp(parsed_ssid, data->deauth_ssid) == 0) {
+                ESP_LOGI(TAG, "Found network '%s' at index %d", parsed_ssid, network_index);
+                execute_deauth_sequence(data, network_index);
+                return;
+            }
+        }
+        
+        // Check for end of scan results
+        if (strstr(line, "Scan results printed") != NULL) {
+            ESP_LOGW(TAG, "Network '%s' not found in scan results", data->deauth_ssid);
+            data->pending_deauth = false;
+            data->needs_redraw = true;
+        }
+        return;
+    }
+    
+    // Normal sniffer results parsing
+    if (data->line_count >= MAX_LINES) return;
     
     // Check for "no results" message
     if (is_no_results_line(line)) {
@@ -304,26 +423,25 @@ static void on_key(screen_t *self, key_code_t key)
                     // Get parent SSID
                     const char *ssid = data->parent_ssid[data->selected_index];
                     
-                    ESP_LOGI(TAG, "Starting deauth on station: %s from network: %s", mac, ssid);
-                    
-                    // Send commands: stop, select_stations MAC, start_deauth
-                    uart_send_command("stop");
-                    
-                    char select_cmd[64];
-                    snprintf(select_cmd, sizeof(select_cmd), "select_stations %s", mac);
-                    uart_send_command(select_cmd);
-                    
-                    uart_send_command("start_deauth");
-                    
-                    // Create params for station deauth screen
-                    station_deauth_params_t *params = calloc(1, sizeof(station_deauth_params_t));
-                    if (params) {
-                        strncpy(params->mac, mac, sizeof(params->mac) - 1);
-                        strncpy(params->ssid, ssid, sizeof(params->ssid) - 1);
-                        
-                        // Push deauth screen
-                        screen_manager_push(station_deauth_screen_create, params);
+                    // Check if we have a valid SSID
+                    if (ssid[0] == '\0') {
+                        ESP_LOGW(TAG, "No parent SSID for MAC %s", mac);
+                        break;
                     }
+                    
+                    ESP_LOGI(TAG, "Initiating deauth on station: %s from network: %s", mac, ssid);
+                    
+                    // Store deauth target info
+                    strncpy(data->deauth_mac, mac, sizeof(data->deauth_mac) - 1);
+                    data->deauth_mac[sizeof(data->deauth_mac) - 1] = '\0';
+                    strncpy(data->deauth_ssid, ssid, sizeof(data->deauth_ssid) - 1);
+                    data->deauth_ssid[sizeof(data->deauth_ssid) - 1] = '\0';
+                    
+                    // Set pending state and request scan results to find network index
+                    data->pending_deauth = true;
+                    uart_send_command("show_scan_results");
+                    
+                    ESP_LOGI(TAG, "Waiting for scan results to find network index...");
                 }
             }
             break;
