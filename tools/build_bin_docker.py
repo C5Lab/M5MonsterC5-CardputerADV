@@ -25,6 +25,18 @@ def parse_args() -> argparse.Namespace:
         default="espressif/idf:v6.0-beta1",
         help="Docker image to use (default: espressif/idf:v6.0-beta1)",
     )
+    parser.add_argument(
+        "--pull",
+        action="store_true",
+        default=True,
+        help="Always pull the image before running (default: enabled)",
+    )
+    parser.add_argument(
+        "--no-pull",
+        dest="pull",
+        action="store_false",
+        help="Disable pulling the image before running",
+    )
     return parser.parse_args()
 
 
@@ -59,11 +71,24 @@ def main() -> int:
         shutil.rmtree(tmpdir, ignore_errors=True)
         return 1
 
+    if args.pull:
+        print(f"Pulling docker image: {args.image}")
+        try:
+            subprocess.run(["docker", "pull", args.image], check=True)
+        except FileNotFoundError:
+            print("docker not found. Please install Docker and ensure it's on PATH.", file=sys.stderr)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return 1
+        except subprocess.CalledProcessError as exc:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return exc.returncode
+
     cmd = [
         "docker",
         "run",
         "--rm",
         "-it",
+        *(["--pull=always"] if args.pull else []),
         "-v",
         f"{workspace.as_posix()}:/project",
         "-w",
