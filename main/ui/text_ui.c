@@ -6,8 +6,28 @@
 #include "text_ui.h"
 #include "font8x16.h"
 #include "battery.h"
+#include "esp_timer.h"
 #include <string.h>
 #include <stdio.h>
+
+// Battery voltage cache (refresh every 30 seconds)
+#define BATTERY_CACHE_INTERVAL_US   (30 * 1000000)  // 30 seconds in microseconds
+static int cached_voltage_mv = 0;
+static int cached_level = 0;
+static int64_t last_battery_read_time = 0;
+
+/**
+ * @brief Update cached battery values if interval has passed
+ */
+static void update_battery_cache(void)
+{
+    int64_t now = esp_timer_get_time();
+    if (cached_voltage_mv == 0 || (now - last_battery_read_time) >= BATTERY_CACHE_INTERVAL_US) {
+        cached_voltage_mv = battery_get_voltage_mv();
+        cached_level = battery_get_level();
+        last_battery_read_time = now;
+    }
+}
 
 void ui_init(void)
 {
@@ -108,13 +128,14 @@ void ui_draw_line(int row, uint16_t color)
 }
 
 /**
- * @brief Draw battery icon with level indicator
+ * @brief Draw battery icon with level indicator and voltage
  * @param x X position (right edge of icon)
  * @param y Y position
  * @param level Battery level 0-100
+ * @param voltage_mv Battery voltage in millivolts
  * @param bg Background color
  */
-static void draw_battery_icon(int x, int y, int level, uint16_t bg)
+static void draw_battery_icon(int x, int y, int level, int voltage_mv, uint16_t bg)
 {
     // Battery icon dimensions
     const int bat_width = 18;
@@ -147,21 +168,26 @@ static void draw_battery_icon(int x, int y, int level, uint16_t bg)
     display_fill_rect(bx + 1, by + 1, bat_width - 2, bat_height - 2, bg);
     
     // Draw fill level (inside battery body)
-    int fill_width = ((bat_width - 4) * level) / 100;
+    int clamped_level = (level < 0) ? 0 : (level > 100) ? 100 : level;
+    int fill_width = ((bat_width - 4) * clamped_level) / 100;
     if (fill_width > 0) {
         display_fill_rect(bx + 2, by + 2, fill_width, bat_height - 4, fill_color);
     }
     
-    // Draw percentage text to the left of battery icon
-    // Clamp level to valid range to satisfy compiler
-    int display_level = (level < 0) ? 0 : (level > 100) ? 100 : level;
-    char pct_str[8];
-    snprintf(pct_str, sizeof(pct_str), "%d%%", display_level);
-    int text_len = strlen(pct_str);
+    // Draw voltage text to the left of battery icon (e.g. "4.12V")
+    char volt_str[12];
+    if (voltage_mv > 0 && voltage_mv < 10000) {
+        int volts = voltage_mv / 1000;
+        int decimals = (voltage_mv % 1000) / 10;
+        snprintf(volt_str, sizeof(volt_str), "%d.%02dV", volts, decimals);
+    } else {
+        snprintf(volt_str, sizeof(volt_str), "?.??V");
+    }
+    int text_len = strlen(volt_str);
     int text_x = bx - (text_len * FONT_WIDTH) - 2;
     
-    // Use smaller positioning for percentage (vertically centered)
-    ui_draw_text(text_x, y - 2, pct_str, UI_COLOR_DIMMED, bg);
+    // Draw voltage text (vertically centered)
+    ui_draw_text(text_x, y - 2, volt_str, UI_COLOR_DIMMED, bg);
 }
 
 void ui_draw_title(const char *title)
@@ -178,12 +204,12 @@ void ui_draw_title(const char *title)
         ui_draw_text(x, 1, title, UI_COLOR_TITLE, title_bg);
     }
     
-    // Draw battery indicator on the right side
+    // Draw battery indicator on the right side (uses cached values, refreshed every 30s)
     if (battery_is_available()) {
-        int level = battery_get_level();
-        if (level >= 0) {
+        update_battery_cache();
+        if (cached_level >= 0 && cached_voltage_mv > 0) {
             // Position battery icon at right edge with some margin
-            draw_battery_icon(DISPLAY_WIDTH - 4, 4, level, title_bg);
+            draw_battery_icon(DISPLAY_WIDTH - 4, 4, cached_level, cached_voltage_mv, title_bg);
         }
     }
     

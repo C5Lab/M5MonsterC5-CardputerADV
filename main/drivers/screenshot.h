@@ -30,3 +30,4 @@ bool screenshot_is_available(void);
 
 #endif // SCREENSHOT_H
 
+

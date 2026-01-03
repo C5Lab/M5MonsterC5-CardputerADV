@@ -17,3 +17,4 @@ screen_t* deauth_detector_screen_create(void *params);
 
 #endif // DEAUTH_DETECTOR_SCREEN_H
 
+
