@@ -42,6 +42,11 @@ idf_component_register(
         "screens/bt_locator_track_screen.c"
         "screens/placeholder_screen.c"
         "screens/deauth_detector_screen.c"
+        "screens/compromised_menu_screen.c"
+        "screens/evil_twin_passwords_screen.c"
+        "screens/portal_data_screen.c"
+        "screens/handshakes_screen.c"
+        "screens/data_detail_screen.c"
     INCLUDE_DIRS 
         "."
         "drivers"

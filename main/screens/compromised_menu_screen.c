@@ -1,36 +1,28 @@
 /**
- * @file home_screen.c
- * @brief Home screen implementation with main menu
+ * @file compromised_menu_screen.c
+ * @brief Compromised data submenu screen implementation
  */
 
-#include "home_screen.h"
-#include "wifi_scan_screen.h"
-#include "global_attacks_screen.h"
-#include "sniff_karma_menu_screen.h"
-#include "bt_menu_screen.h"
-#include "deauth_detector_screen.h"
 #include "compromised_menu_screen.h"
-#include "placeholder_screen.h"
+#include "evil_twin_passwords_screen.h"
+#include "portal_data_screen.h"
+#include "handshakes_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
 #include <string.h>
 
-static const char *TAG = "HOME_SCREEN";
+static const char *TAG = "COMPROMISED_MENU";
 
 // Menu items
 typedef struct {
     const char *title;
     screen_create_fn create_fn;
-    const char *placeholder_title;
 } menu_item_t;
 
 static const menu_item_t menu_items[] = {
-    {"WiFi Scan & Attack", wifi_scan_screen_create, NULL},
-    {"Global WiFi Attacks", global_attacks_screen_create, NULL},
-    {"WiFi Sniff&Karma", sniff_karma_menu_screen_create, NULL},
-    {"Deauth Detector", deauth_detector_screen_create, NULL},
-    {"Bluetooth", bt_menu_screen_create, NULL},
-    {"Compromised data", compromised_menu_screen_create, NULL},
+    {"Evil Twin Passwords", evil_twin_passwords_screen_create},
+    {"Portal Data", portal_data_screen_create},
+    {"Handshakes", handshakes_screen_create},
 };
 
 #define MENU_ITEM_COUNT (sizeof(menu_items) / sizeof(menu_items[0]))
@@ -38,16 +30,16 @@ static const menu_item_t menu_items[] = {
 // Screen user data
 typedef struct {
     int selected_index;
-} home_screen_data_t;
+} compromised_menu_data_t;
 
 static void draw_screen(screen_t *self)
 {
-    home_screen_data_t *data = (home_screen_data_t *)self->user_data;
+    compromised_menu_data_t *data = (compromised_menu_data_t *)self->user_data;
     
     ui_clear();
     
     // Draw title
-    ui_draw_title("LABORATORIUM");
+    ui_draw_title("Compromised Data");
     
     // Draw menu items
     for (int i = 0; i < MENU_ITEM_COUNT; i++) {
@@ -55,11 +47,11 @@ static void draw_screen(screen_t *self)
     }
     
     // Draw status bar
-    ui_draw_status("UP/DOWN:Navigate ENTER:Select");
+    ui_draw_status("UP/DOWN:Navigate ENTER:Select ESC:Back");
 }
 
 // Optimized: redraw only two changed rows
-static void redraw_selection(home_screen_data_t *data, int old_index, int new_index)
+static void redraw_selection(compromised_menu_data_t *data, int old_index, int new_index)
 {
     // Redraw old selection (now unselected)
     ui_draw_menu_item(old_index + 1, menu_items[old_index].title, false, false, false);
@@ -69,7 +61,7 @@ static void redraw_selection(home_screen_data_t *data, int old_index, int new_in
 
 static void on_key(screen_t *self, key_code_t key)
 {
-    home_screen_data_t *data = (home_screen_data_t *)self->user_data;
+    compromised_menu_data_t *data = (compromised_menu_data_t *)self->user_data;
     
     switch (key) {
         case KEY_UP:
@@ -94,11 +86,14 @@ static void on_key(screen_t *self, key_code_t key)
                 const menu_item_t *item = &menu_items[data->selected_index];
                 if (item->create_fn) {
                     screen_manager_push(item->create_fn, NULL);
-                } else {
-                    // Push placeholder screen
-                    screen_manager_push(placeholder_screen_create, (void*)item->placeholder_title);
                 }
             }
+            break;
+            
+        case KEY_ESC:
+        case KEY_Q:
+        case KEY_BACKSPACE:
+            screen_manager_pop();
             break;
             
         default:
@@ -118,17 +113,17 @@ static void on_resume(screen_t *self)
     draw_screen(self);
 }
 
-screen_t* home_screen_create(void *params)
+screen_t* compromised_menu_screen_create(void *params)
 {
     (void)params;
     
-    ESP_LOGI(TAG, "Creating home screen...");
+    ESP_LOGI(TAG, "Creating compromised menu screen...");
     
     screen_t *screen = screen_alloc();
     if (!screen) return NULL;
     
     // Allocate user data
-    home_screen_data_t *data = calloc(1, sizeof(home_screen_data_t));
+    compromised_menu_data_t *data = calloc(1, sizeof(compromised_menu_data_t));
     if (!data) {
         free(screen);
         return NULL;
@@ -143,6 +138,7 @@ screen_t* home_screen_create(void *params)
     // Draw initial screen
     draw_screen(screen);
     
-    ESP_LOGI(TAG, "Home screen created");
+    ESP_LOGI(TAG, "Compromised menu screen created");
     return screen;
 }
+
