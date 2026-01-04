@@ -7,10 +7,14 @@
 #include "uart_handler.h"
 #include "text_ui.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <string.h>
 #include <stdlib.h>
 
 static const char *TAG = "EVIL_TWIN";
+
+// Refresh timer interval (200ms)
+#define REFRESH_INTERVAL_US 200000
 
 // Screen states
 typedef enum {
@@ -27,11 +31,24 @@ typedef struct {
     char captured_ssid[MAX_SSID_LEN];
     char captured_password[64];
     bool needs_redraw;  // Flag for thread-safe redraw
+    esp_timer_handle_t refresh_timer;
     screen_t *self;  // Reference to self for callback
 } evil_twin_screen_data_t;
 
 // Forward declaration
 static void draw_screen(screen_t *self);
+
+/**
+ * @brief Timer callback - checks if redraw is needed
+ */
+static void refresh_timer_callback(void *arg)
+{
+    evil_twin_screen_data_t *data = (evil_twin_screen_data_t *)arg;
+    if (data && data->needs_redraw && data->self) {
+        data->needs_redraw = false;
+        draw_screen(data->self);
+    }
+}
 
 /**
  * @brief Extract value between single quotes from a string
@@ -202,12 +219,6 @@ static void on_key(screen_t *self, key_code_t key)
 {
     evil_twin_screen_data_t *data = (evil_twin_screen_data_t *)self->user_data;
     
-    // Check if redraw needed from UART callback (thread-safe)
-    if (data->needs_redraw) {
-        data->needs_redraw = false;
-        draw_screen(self);
-    }
-    
     switch (key) {
         case KEY_ESC:
         case KEY_Q:
@@ -226,6 +237,12 @@ static void on_key(screen_t *self, key_code_t key)
 static void on_destroy(screen_t *self)
 {
     evil_twin_screen_data_t *data = (evil_twin_screen_data_t *)self->user_data;
+    
+    // Stop and delete timer
+    if (data && data->refresh_timer) {
+        esp_timer_stop(data->refresh_timer);
+        esp_timer_delete(data->refresh_timer);
+    }
     
     // Clear UART callback
     uart_clear_line_callback();
@@ -276,6 +293,19 @@ screen_t* evil_twin_screen_create(void *params)
     screen->on_key = on_key;
     screen->on_destroy = on_destroy;
     screen->on_draw = draw_screen;
+    
+    // Create periodic refresh timer
+    esp_timer_create_args_t timer_args = {
+        .callback = refresh_timer_callback,
+        .arg = data,
+        .name = "evil_twin_refresh"
+    };
+    
+    if (esp_timer_create(&timer_args, &data->refresh_timer) == ESP_OK) {
+        esp_timer_start_periodic(data->refresh_timer, REFRESH_INTERVAL_US);
+    } else {
+        ESP_LOGW(TAG, "Failed to create refresh timer");
+    }
     
     // Register UART callback for parsing Evil Twin output
     uart_register_line_callback(uart_line_callback, data);

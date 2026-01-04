@@ -38,3 +38,5 @@ bool battery_is_available(void);
 #endif // BATTERY_H
 
 
+
+
