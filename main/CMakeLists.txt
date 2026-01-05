@@ -2,6 +2,7 @@ idf_component_register(
     SRCS 
         "main.c"
         "uart_handler.c"
+        "settings.c"
         "screen_manager.c"
         "drivers/display.c"
         "drivers/keyboard.c"
@@ -48,6 +49,8 @@ idf_component_register(
         "screens/portal_data_screen.c"
         "screens/handshakes_screen.c"
         "screens/data_detail_screen.c"
+        "screens/settings_screen.c"
+        "screens/uart_pins_screen.c"
     INCLUDE_DIRS 
         "."
         "drivers"
@@ -64,4 +67,5 @@ idf_component_register(
         vfs
         sdmmc
         esp_adc
+        nvs_flash
 )

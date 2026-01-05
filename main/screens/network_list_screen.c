@@ -232,17 +232,24 @@ static void on_key(screen_t *self, key_code_t key)
                 draw_screen(self);  // Full redraw when switching focus
             } else if (data->selected_index > 0) {
                 int old_idx = data->selected_index;
-                int old_scroll = data->scroll_offset;
-                data->selected_index--;
-                // Scroll up if needed
-                if (data->selected_index < data->scroll_offset) {
-                    data->scroll_offset = data->selected_index;
-                }
-                // Check if scrolled
-                if (old_scroll != data->scroll_offset) {
-                    redraw_list(data);  // Full list redraw when scrolling
+                
+                // Check if at first visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset && data->scroll_offset > 0) {
+                    // Jump to previous page
+                    data->scroll_offset -= VISIBLE_ITEMS;
+                    if (data->scroll_offset < 0) {
+                        data->scroll_offset = 0;
+                    }
+                    // Set cursor to bottom of previous page
+                    data->selected_index = data->scroll_offset + VISIBLE_ITEMS - 1;
+                    if (data->selected_index >= data->count) {
+                        data->selected_index = data->count - 1;
+                    }
+                    redraw_list(data);  // Full page redraw
                 } else {
-                    redraw_two_rows(data, old_idx, data->selected_index);  // Just 2 rows
+                    // Normal single item navigation within page
+                    data->selected_index--;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
             }
             break;
@@ -252,16 +259,24 @@ static void on_key(screen_t *self, key_code_t key)
                 if (data->selected_index < data->count - 1) {
                     int old_idx = data->selected_index;
                     int old_scroll = data->scroll_offset;
-                    data->selected_index++;
-                    // Scroll down if needed
-                    if (data->selected_index >= data->scroll_offset + VISIBLE_ITEMS) {
-                        data->scroll_offset = data->selected_index - VISIBLE_ITEMS + 1;
-                    }
-                    // Check if scrolled
-                    if (old_scroll != data->scroll_offset) {
-                        redraw_list(data);  // Full list redraw when scrolling
+                    
+                    // Check if at last visible item on page - do page jump
+                    if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
+                        // Jump to next page
+                        data->scroll_offset += VISIBLE_ITEMS;
+                        // Clamp scroll_offset to valid range
+                        int max_scroll = data->count - VISIBLE_ITEMS;
+                        if (max_scroll < 0) max_scroll = 0;
+                        if (data->scroll_offset > max_scroll) {
+                            data->scroll_offset = max_scroll;
+                        }
+                        // Set cursor to top of new page
+                        data->selected_index = data->scroll_offset;
+                        redraw_list(data);  // Full page redraw
                     } else {
-                        redraw_two_rows(data, old_idx, data->selected_index);  // Just 2 rows
+                        // Normal single item navigation within page
+                        data->selected_index++;
+                        redraw_two_rows(data, old_idx, data->selected_index);
                     }
                 } else {
                     // Move focus to Next button

@@ -10,6 +10,7 @@
 #include "bt_menu_screen.h"
 #include "deauth_detector_screen.h"
 #include "compromised_menu_screen.h"
+#include "settings_screen.h"
 #include "placeholder_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -31,6 +32,7 @@ static const menu_item_t menu_items[] = {
     {"Deauth Detector", deauth_detector_screen_create, NULL},
     {"Bluetooth", bt_menu_screen_create, NULL},
     {"Compromised data", compromised_menu_screen_create, NULL},
+    {"Settings", settings_screen_create, NULL},
 };
 
 #define MENU_ITEM_COUNT (sizeof(menu_items) / sizeof(menu_items[0]))

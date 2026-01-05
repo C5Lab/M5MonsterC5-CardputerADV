@@ -16,6 +16,7 @@
 #include "home_screen.h"
 #include "screenshot.h"
 #include "battery.h"
+#include "settings.h"
 
 #define JANOS_ADV_VERSION "1.0.8"
 
@@ -25,9 +26,18 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "Cardputer-ADV WiFi Attack Application Starting...");
 
+    // Initialize settings (NVS)
+    ESP_LOGI(TAG, "Initializing settings...");
+    esp_err_t ret = settings_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Settings initialization failed!");
+        return;
+    }
+    ESP_LOGI(TAG, "Settings initialized successfully");
+
     // Initialize display
     ESP_LOGI(TAG, "Initializing display...");
-    esp_err_t ret = display_init();
+    ret = display_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Display initialization failed!");
         return;

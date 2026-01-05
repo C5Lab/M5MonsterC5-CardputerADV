@@ -4,6 +4,7 @@
  */
 
 #include "uart_handler.h"
+#include "settings.h"
 #include "esp_log.h"
 #include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
@@ -177,7 +178,10 @@ static void uart_rx_task(void *arg)
 
 esp_err_t uart_handler_init(void)
 {
-    ESP_LOGI(TAG, "Initializing UART handler (TX=%d, RX=%d)...", UART_TX_PIN, UART_RX_PIN);
+    int tx_pin = settings_get_uart_tx_pin();
+    int rx_pin = settings_get_uart_rx_pin();
+    
+    ESP_LOGI(TAG, "Initializing UART handler (TX=%d, RX=%d)...", tx_pin, rx_pin);
 
     // Create mutex
     uart_mutex = xSemaphoreCreateMutex();
@@ -202,7 +206,7 @@ esp_err_t uart_handler_init(void)
         return ret;
     }
 
-    ret = uart_set_pin(UART_PORT_NUM, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    ret = uart_set_pin(UART_PORT_NUM, tx_pin, rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "UART set pin failed: %s", esp_err_to_name(ret));
         return ret;
