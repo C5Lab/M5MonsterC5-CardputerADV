@@ -210,19 +210,23 @@ static void on_key(screen_t *self, key_code_t key)
     bt_scan_data_t *data = (bt_scan_data_t *)self->user_data;
     int visible_rows = 5;
     
-    on_tick(self);
-    
     switch (key) {
         case KEY_UP:
             if (data->scroll_offset > 0) {
-                data->scroll_offset--;
+                // Page jump up
+                data->scroll_offset -= visible_rows;
+                if (data->scroll_offset < 0) data->scroll_offset = 0;
                 draw_screen(self);
             }
             break;
             
         case KEY_DOWN:
             if (data->scroll_offset + visible_rows < data->device_count) {
-                data->scroll_offset++;
+                // Page jump down
+                data->scroll_offset += visible_rows;
+                int max_scroll = data->device_count - visible_rows;
+                if (max_scroll < 0) max_scroll = 0;
+                if (data->scroll_offset > max_scroll) data->scroll_offset = max_scroll;
                 draw_screen(self);
             }
             break;
@@ -286,6 +290,7 @@ screen_t* bt_scan_screen_create(void *params)
     ESP_LOGI(TAG, "BT scan screen created");
     return screen;
 }
+
 
 
 

@@ -209,20 +209,22 @@ static void on_key(screen_t *self, key_code_t key)
 {
     html_select_screen_data_t *data = (html_select_screen_data_t *)self->user_data;
     
-    // Also check on key press for faster response
-    on_tick(self);
-    
     switch (key) {
         case KEY_UP:
             if (!data->loading && data->selected_index > 0) {
                 int old_idx = data->selected_index;
-                data->selected_index--;
                 
-                // Scroll up if needed
-                if (data->selected_index < data->scroll_offset) {
-                    data->scroll_offset = data->selected_index;
+                // Check if at first visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset && data->scroll_offset > 0) {
+                    data->scroll_offset -= VISIBLE_ITEMS;
+                    if (data->scroll_offset < 0) data->scroll_offset = 0;
+                    data->selected_index = data->scroll_offset + VISIBLE_ITEMS - 1;
+                    if (data->selected_index >= data->file_count) {
+                        data->selected_index = data->file_count - 1;
+                    }
                     draw_screen(self);
                 } else {
+                    data->selected_index--;
                     // Just redraw the two affected rows
                     int start_row = 1;
                     int old_row = old_idx - data->scroll_offset;
@@ -251,13 +253,17 @@ static void on_key(screen_t *self, key_code_t key)
         case KEY_DOWN:
             if (!data->loading && data->selected_index < data->file_count - 1) {
                 int old_idx = data->selected_index;
-                data->selected_index++;
                 
-                // Scroll down if needed
-                if (data->selected_index >= data->scroll_offset + VISIBLE_ITEMS) {
-                    data->scroll_offset = data->selected_index - VISIBLE_ITEMS + 1;
+                // Check if at last visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
+                    data->scroll_offset += VISIBLE_ITEMS;
+                    int max_scroll = data->file_count - VISIBLE_ITEMS;
+                    if (max_scroll < 0) max_scroll = 0;
+                    if (data->scroll_offset > max_scroll) data->scroll_offset = max_scroll;
+                    data->selected_index = data->scroll_offset;
                     draw_screen(self);
                 } else {
+                    data->selected_index++;
                     // Just redraw the two affected rows
                     int start_row = 1;
                     int old_row = old_idx - data->scroll_offset;

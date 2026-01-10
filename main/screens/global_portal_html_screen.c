@@ -199,34 +199,67 @@ static void on_key(screen_t *self, key_code_t key)
 {
     global_portal_html_data_t *data = (global_portal_html_data_t *)self->user_data;
     
-    // Check if redraw needed from UART callback
-    if (data->needs_redraw) {
-        data->needs_redraw = false;
-        draw_screen(self);
-    }
-    
     switch (key) {
         case KEY_UP:
             if (!data->loading && data->selected_index > 0) {
-                data->selected_index--;
-                
-                // Scroll up if needed
-                if (data->selected_index < data->scroll_offset) {
-                    data->scroll_offset = data->selected_index;
+                int old_idx = data->selected_index;
+                // Check if at first visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset && data->scroll_offset > 0) {
+                    data->scroll_offset -= VISIBLE_ITEMS;
+                    if (data->scroll_offset < 0) data->scroll_offset = 0;
+                    data->selected_index = data->scroll_offset + VISIBLE_ITEMS - 1;
+                    if (data->selected_index >= data->file_count) {
+                        data->selected_index = data->file_count - 1;
+                    }
+                    draw_screen(self);  // Full redraw on page jump
+                } else {
+                    data->selected_index--;
+                    // Redraw only 2 rows
+                    int start_row = 1;
+                    for (int idx = old_idx; idx >= data->selected_index; idx--) {
+                        int i = idx - data->scroll_offset;
+                        if (i >= 0 && i < VISIBLE_ITEMS && idx < data->file_count) {
+                            char label[28];
+                            strncpy(label, data->html_files[idx], sizeof(label) - 1);
+                            label[sizeof(label) - 1] = '\0';
+                            char *ext = strstr(label, ".html");
+                            if (ext) *ext = '\0';
+                            bool selected = (idx == data->selected_index);
+                            ui_draw_menu_item(start_row + i, label, selected, false, false);
+                        }
+                    }
                 }
-                draw_screen(self);
             }
             break;
             
         case KEY_DOWN:
             if (!data->loading && data->selected_index < data->file_count - 1) {
-                data->selected_index++;
-                
-                // Scroll down if needed
-                if (data->selected_index >= data->scroll_offset + VISIBLE_ITEMS) {
-                    data->scroll_offset = data->selected_index - VISIBLE_ITEMS + 1;
+                int old_idx = data->selected_index;
+                // Check if at last visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
+                    data->scroll_offset += VISIBLE_ITEMS;
+                    int max_scroll = data->file_count - VISIBLE_ITEMS;
+                    if (max_scroll < 0) max_scroll = 0;
+                    if (data->scroll_offset > max_scroll) data->scroll_offset = max_scroll;
+                    data->selected_index = data->scroll_offset;
+                    draw_screen(self);  // Full redraw on page jump
+                } else {
+                    data->selected_index++;
+                    // Redraw only 2 rows
+                    int start_row = 1;
+                    for (int idx = old_idx; idx <= data->selected_index; idx++) {
+                        int i = idx - data->scroll_offset;
+                        if (i >= 0 && i < VISIBLE_ITEMS && idx < data->file_count) {
+                            char label[28];
+                            strncpy(label, data->html_files[idx], sizeof(label) - 1);
+                            label[sizeof(label) - 1] = '\0';
+                            char *ext = strstr(label, ".html");
+                            if (ext) *ext = '\0';
+                            bool selected = (idx == data->selected_index);
+                            ui_draw_menu_item(start_row + i, label, selected, false, false);
+                        }
+                    }
                 }
-                draw_screen(self);
             }
             break;
             
@@ -306,6 +339,7 @@ screen_t* global_portal_html_screen_create(void *params)
     ESP_LOGI(TAG, "Global portal HTML screen created");
     return screen;
 }
+
 
 
 

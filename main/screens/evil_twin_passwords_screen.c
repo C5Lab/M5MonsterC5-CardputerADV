@@ -196,26 +196,63 @@ static void on_key(screen_t *self, key_code_t key)
 {
     evil_twin_passwords_data_t *data = (evil_twin_passwords_data_t *)self->user_data;
     
-    on_tick(self);
-    
     switch (key) {
         case KEY_UP:
             if (data->selected_index > 0) {
-                data->selected_index--;
-                if (data->selected_index < data->scroll_offset) {
-                    data->scroll_offset = data->selected_index;
+                int old_idx = data->selected_index;
+                // Check if at first visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset && data->scroll_offset > 0) {
+                    data->scroll_offset -= VISIBLE_ITEMS;
+                    if (data->scroll_offset < 0) data->scroll_offset = 0;
+                    data->selected_index = data->scroll_offset + VISIBLE_ITEMS - 1;
+                    if (data->selected_index >= data->entry_count) {
+                        data->selected_index = data->entry_count - 1;
+                    }
+                    draw_screen(self);  // Full redraw on page jump
+                } else {
+                    data->selected_index--;
+                    // Redraw only 2 rows
+                    int start_row = 1;
+                    for (int idx = old_idx; idx >= data->selected_index; idx--) {
+                        int i = idx - data->scroll_offset;
+                        if (i >= 0 && i < VISIBLE_ITEMS && idx < data->entry_count) {
+                            password_entry_t *entry = &data->entries[idx];
+                            char label[32];
+                            snprintf(label, sizeof(label), "%.12s: %.14s", entry->ssid, entry->password);
+                            bool selected = (idx == data->selected_index);
+                            ui_draw_menu_item(start_row + i, label, selected, false, false);
+                        }
+                    }
                 }
-                draw_screen(self);
             }
             break;
             
         case KEY_DOWN:
             if (data->selected_index < data->entry_count - 1) {
-                data->selected_index++;
-                if (data->selected_index >= data->scroll_offset + VISIBLE_ITEMS) {
-                    data->scroll_offset = data->selected_index - VISIBLE_ITEMS + 1;
+                int old_idx = data->selected_index;
+                // Check if at last visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
+                    data->scroll_offset += VISIBLE_ITEMS;
+                    int max_scroll = data->entry_count - VISIBLE_ITEMS;
+                    if (max_scroll < 0) max_scroll = 0;
+                    if (data->scroll_offset > max_scroll) data->scroll_offset = max_scroll;
+                    data->selected_index = data->scroll_offset;
+                    draw_screen(self);  // Full redraw on page jump
+                } else {
+                    data->selected_index++;
+                    // Redraw only 2 rows
+                    int start_row = 1;
+                    for (int idx = old_idx; idx <= data->selected_index; idx++) {
+                        int i = idx - data->scroll_offset;
+                        if (i >= 0 && i < VISIBLE_ITEMS && idx < data->entry_count) {
+                            password_entry_t *entry = &data->entries[idx];
+                            char label[32];
+                            snprintf(label, sizeof(label), "%.12s: %.14s", entry->ssid, entry->password);
+                            bool selected = (idx == data->selected_index);
+                            ui_draw_menu_item(start_row + i, label, selected, false, false);
+                        }
+                    }
                 }
-                draw_screen(self);
             }
             break;
             

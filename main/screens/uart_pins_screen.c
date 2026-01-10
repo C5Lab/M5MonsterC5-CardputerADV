@@ -81,6 +81,23 @@ static void draw_screen(screen_t *self)
     ui_draw_status("UP/DOWN:Nav ENTER:Select ESC:Back");
 }
 
+// Redraw a single menu row
+static void redraw_row(uart_pins_data_t *data, int idx)
+{
+    if (idx < 0 || idx >= (int)OPTION_COUNT) return;
+    
+    char label[32];
+    snprintf(label, sizeof(label), "%s (%d/%d)", 
+             uart_options[idx].name,
+             uart_options[idx].tx_pin,
+             uart_options[idx].rx_pin);
+    
+    bool is_selected = (idx == data->selected_index);
+    bool is_current = (idx == data->current_option);
+    
+    ui_draw_menu_item(idx + 1, label, is_selected, true, is_current);
+}
+
 static void on_key(screen_t *self, key_code_t key)
 {
     uart_pins_data_t *data = (uart_pins_data_t *)self->user_data;
@@ -88,17 +105,31 @@ static void on_key(screen_t *self, key_code_t key)
     switch (key) {
         case KEY_UP:
             if (data->selected_index > 0) {
+                int old_idx = data->selected_index;
                 data->selected_index--;
-                data->saved = false;
-                draw_screen(self);
+                // Clear "Saved!" message if shown
+                if (data->saved) {
+                    data->saved = false;
+                    display_fill_rect(0, 5 * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+                }
+                // Redraw only 2 rows
+                redraw_row(data, old_idx);
+                redraw_row(data, data->selected_index);
             }
             break;
             
         case KEY_DOWN:
             if (data->selected_index < (int)OPTION_COUNT - 1) {
+                int old_idx = data->selected_index;
                 data->selected_index++;
-                data->saved = false;
-                draw_screen(self);
+                // Clear "Saved!" message if shown
+                if (data->saved) {
+                    data->saved = false;
+                    display_fill_rect(0, 5 * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+                }
+                // Redraw only 2 rows
+                redraw_row(data, old_idx);
+                redraw_row(data, data->selected_index);
             }
             break;
             

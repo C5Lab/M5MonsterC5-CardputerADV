@@ -170,9 +170,6 @@ static void on_tick(screen_t *self)
 
 static void on_key(screen_t *self, key_code_t key)
 {
-    // Check for updates on key press
-    on_tick(self);
-    
     switch (key) {
         case KEY_ESC:
         case KEY_Q:

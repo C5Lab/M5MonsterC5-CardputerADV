@@ -81,9 +81,6 @@ static void on_key(screen_t *self, key_code_t key)
 {
     ESP_LOGI(TAG, "Global sniffer on_key received: %d", (int)key);
     
-    // Also check redraw on any key press for faster response
-    on_tick(self);
-    
     switch (key) {
         case KEY_R:
             // Show results (sniffer keeps running)

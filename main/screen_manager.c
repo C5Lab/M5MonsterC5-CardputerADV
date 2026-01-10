@@ -117,9 +117,10 @@ esp_err_t screen_manager_pop(void)
     screen_t *prev = screen_manager_get_current();
     if (prev) {
         if (prev->on_resume) {
+            // on_resume handles its own redraw
             prev->on_resume(prev);
-        }
-        if (prev->on_draw) {
+        } else if (prev->on_draw) {
+            // No on_resume, so we need to redraw
             ui_clear();
             prev->on_draw(prev);
         }

@@ -383,29 +383,71 @@ static void on_key(screen_t *self, key_code_t key)
     sniffer_results_data_t *data = (sniffer_results_data_t *)self->user_data;
     int visible_rows = 5;
     
-    // Also check on key press for faster response
-    on_tick(self);
-    
     switch (key) {
         case KEY_UP:
             if (data->selected_index > 0) {
-                data->selected_index--;
-                // Adjust scroll if selection goes above visible area
-                if (data->selected_index < data->scroll_offset) {
-                    data->scroll_offset = data->selected_index;
+                int old_idx = data->selected_index;
+                // Check if at first visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset && data->scroll_offset > 0) {
+                    data->scroll_offset -= visible_rows;
+                    if (data->scroll_offset < 0) data->scroll_offset = 0;
+                    data->selected_index = data->scroll_offset + visible_rows - 1;
+                    if (data->selected_index >= data->line_count) {
+                        data->selected_index = data->line_count - 1;
+                    }
+                    draw_screen(self);  // Full redraw on page jump
+                } else {
+                    data->selected_index--;
+                    // Redraw only 2 rows
+                    int start_row = 1;
+                    for (int idx = old_idx; idx >= data->selected_index; idx--) {
+                        int i = idx - data->scroll_offset;
+                        if (i >= 0 && i < visible_rows && idx < data->line_count) {
+                            const char *line = data->lines[idx];
+                            bool is_selected = (idx == data->selected_index);
+                            bool is_mac = (line[0] == ' ');
+                            uint16_t color = is_selected ? UI_COLOR_SELECTED : (is_mac ? UI_COLOR_DIMMED : UI_COLOR_HIGHLIGHT);
+                            char display[31];
+                            display[0] = is_selected ? '>' : ' ';
+                            strncpy(display + 1, line, 29);
+                            display[30] = '\0';
+                            ui_print(0, start_row + i, display, color);
+                        }
+                    }
                 }
-                draw_screen(self);
             }
             break;
             
         case KEY_DOWN:
             if (data->selected_index < data->line_count - 1) {
-                data->selected_index++;
-                // Adjust scroll if selection goes below visible area
-                if (data->selected_index >= data->scroll_offset + visible_rows) {
-                    data->scroll_offset = data->selected_index - visible_rows + 1;
+                int old_idx = data->selected_index;
+                // Check if at last visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset + visible_rows - 1) {
+                    data->scroll_offset += visible_rows;
+                    int max_scroll = data->line_count - visible_rows;
+                    if (max_scroll < 0) max_scroll = 0;
+                    if (data->scroll_offset > max_scroll) data->scroll_offset = max_scroll;
+                    data->selected_index = data->scroll_offset;
+                    draw_screen(self);  // Full redraw on page jump
+                } else {
+                    data->selected_index++;
+                    // Redraw only 2 rows
+                    int start_row = 1;
+                    for (int idx = old_idx; idx <= data->selected_index; idx++) {
+                        int i = idx - data->scroll_offset;
+                        if (i >= 0 && i < visible_rows && idx < data->line_count) {
+                            const char *line = data->lines[idx];
+                            bool is_selected = (idx == data->selected_index);
+                            bool is_mac = (line[0] == ' ');
+                            uint16_t color = is_selected ? UI_COLOR_SELECTED : (is_mac ? UI_COLOR_DIMMED : UI_COLOR_HIGHLIGHT);
+                            char display[31];
+                            display[0] = is_selected ? '>' : ' ';
+                            strncpy(display + 1, line, 29);
+                            display[30] = '\0';
+                            ui_print(0, start_row + i, display, color);
+                        }
+                    }
                 }
-                draw_screen(self);
             }
             break;
             

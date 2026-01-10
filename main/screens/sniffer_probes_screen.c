@@ -175,20 +175,23 @@ static void on_key(screen_t *self, key_code_t key)
     sniffer_probes_data_t *data = (sniffer_probes_data_t *)self->user_data;
     int visible_rows = 5;
     
-    // Also check on key press for faster response
-    on_tick(self);
-    
     switch (key) {
         case KEY_UP:
             if (data->scroll_offset > 0) {
-                data->scroll_offset--;
+                // Page jump up
+                data->scroll_offset -= visible_rows;
+                if (data->scroll_offset < 0) data->scroll_offset = 0;
                 draw_screen(self);
             }
             break;
             
         case KEY_DOWN:
             if (data->scroll_offset + visible_rows < data->probe_count) {
-                data->scroll_offset++;
+                // Page jump down
+                data->scroll_offset += visible_rows;
+                int max_scroll = data->probe_count - visible_rows;
+                if (max_scroll < 0) max_scroll = 0;
+                if (data->scroll_offset > max_scroll) data->scroll_offset = max_scroll;
                 draw_screen(self);
             }
             break;
