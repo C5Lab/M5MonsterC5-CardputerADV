@@ -415,13 +415,12 @@
         }
       } catch {}
       let cleaned = path.startsWith("/") ? path.slice(1) : path;
-      const branch = getBranch();
-      if (branch === "main") return cleaned;
       const repo = getRepoSlug();
       if (!repo) return cleaned;
       if (cleaned.startsWith("firmware/")) {
         cleaned = cleaned.replace(/^firmware\//, "binaries-esp32s3/");
       }
+      const branch = getBranch();
       return `https://raw.githubusercontent.com/${repo}/${branch}/${cleaned}`;
     };
 

@@ -4,8 +4,8 @@
   "build": "latest",
   "chipFamily": "ESP32-S3",
   "parts": [
-    { "path": "https://github.com/C5Lab/M5MonsterC5-CardputerADV/releases/latest/download/bootloader.bin", "offset": 0 },
-    { "path": "https://github.com/C5Lab/M5MonsterC5-CardputerADV/releases/latest/download/partition-table.bin", "offset": 32768 },
-    { "path": "https://github.com/C5Lab/M5MonsterC5-CardputerADV/releases/latest/download/M5MonsterC5-CardputerADV.bin", "offset": 65536 }
+    { "path": "firmware/bootloader.bin", "offset": 0 },
+    { "path": "firmware/partition-table.bin", "offset": 32768 },
+    { "path": "firmware/M5MonsterC5-CardputerADV.bin", "offset": 65536 }
   ]
 }
