@@ -290,8 +290,7 @@
       </div>
       <div class="card">
         <h2>Need offline?</h2>
-        <p>Grab the same assets from Releases and flash with esptool if your browser blocks Web Serial.</p>
-        <pre class="mono">python -m esptool --chip esp32s3 -b 460800 --before default-reset --after hard-reset write-flash --flash-mode dio --flash-size 4MB --flash-freq 80m 0x0 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 build/M5MonsterC5-CardputerADV.bin</pre>
+        <p>Grab the same assets from Releases and run <code>flash_board.py</code> in <code>binaries-esp32s3</code> if your browser blocks Web Serial.</p>
       </div>
       <div class="card">
         <h2>Browser support</h2>
@@ -416,13 +415,12 @@
         }
       } catch {}
       let cleaned = path.startsWith("/") ? path.slice(1) : path;
-      const branch = getBranch();
-      if (branch === "main") return cleaned;
       const repo = getRepoSlug();
       if (!repo) return cleaned;
       if (cleaned.startsWith("firmware/")) {
         cleaned = cleaned.replace(/^firmware\//, "binaries-esp32s3/");
       }
+      const branch = getBranch();
       return `https://raw.githubusercontent.com/${repo}/${branch}/${cleaned}`;
     };
 
@@ -615,6 +613,23 @@
       return files;
     };
 
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const resetAfterFlash = async () => {
+      if (!state.port || typeof state.port.setSignals !== "function") return false;
+      try {
+        // Toggle RTS/DTR to reset the ESP32 via USB-serial control lines.
+        await state.port.setSignals({ dataTerminalReady: false, requestToSend: true });
+        await sleep(120);
+        await state.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+        await sleep(120);
+        await state.port.setSignals({ dataTerminalReady: true, requestToSend: false });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
 const flash = async () => {
       ensureSupport();
       if (!state.esploader) {
@@ -642,9 +657,15 @@ const flash = async () => {
         };
         await state.esploader.writeFlash(flashOptions);
         await state.esploader.after();
+        const resetOk = await resetAfterFlash();
         ui.progress.style.width = "100%";
-        setStatus("Flash complete. Press RESET if the board doesn't reboot.");
-        log("Flash complete.");
+        if (resetOk) {
+          setStatus("Flash complete. Device rebooted.");
+          log("Flash complete. Reset signal sent.");
+        } else {
+          setStatus("Flash complete. Press RESET if the board doesn't reboot.");
+          log("Flash complete.");
+        }
       } catch (err) {
         console.error(err);
         setStatus(err.message || "Flash failed", "error");
