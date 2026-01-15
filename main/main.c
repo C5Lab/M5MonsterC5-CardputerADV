@@ -20,7 +20,7 @@
 #include "settings.h"
 #include "buzzer.h"
 
-#define JANOS_ADV_VERSION "1.3.3"
+#define JANOS_ADV_VERSION "1.3.4"
 
 // Screen timeout configuration
 #define SCREEN_TIMEOUT_MS  30000  // 30 seconds

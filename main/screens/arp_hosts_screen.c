@@ -34,6 +34,7 @@ typedef struct {
     int scroll_offset;
     bool scanning;
     bool needs_redraw;
+    bool not_connected;  // True if WiFi not connected
     screen_t *self;
 } arp_hosts_data_t;
 
@@ -150,6 +151,14 @@ static void draw_screen(screen_t *self)
     
     ui_clear();
     ui_draw_title("ARP Hosts");
+    
+    if (data->not_connected) {
+        ui_print_center(2, "Not connected to WiFi", UI_COLOR_TEXT);
+        ui_print_center(4, "Connect first via", UI_COLOR_DIMMED);
+        ui_print_center(5, "Network Attacks menu", UI_COLOR_DIMMED);
+        ui_draw_status("ESC:Back");
+        return;
+    }
     
     if (data->scanning) {
         ui_print_center(3, "Scanning network...", UI_COLOR_DIMMED);
@@ -322,8 +331,15 @@ screen_t* arp_hosts_screen_create(void *params)
         return NULL;
     }
     
-    data->scanning = true;
     data->self = screen;
+    
+    // Check if WiFi is connected
+    if (!uart_is_wifi_connected()) {
+        data->not_connected = true;
+        data->scanning = false;
+    } else {
+        data->scanning = true;
+    }
     
     screen->user_data = data;
     screen->on_key = on_key;
@@ -335,9 +351,11 @@ screen_t* arp_hosts_screen_create(void *params)
     // Draw initial screen
     draw_screen(screen);
     
-    // Register UART callback and start host scan
-    uart_register_line_callback(uart_line_callback, data);
-    uart_send_command("list_hosts_vendor");
+    // Only start scan if connected
+    if (!data->not_connected) {
+        uart_register_line_callback(uart_line_callback, data);
+        uart_send_command("list_hosts_vendor");
+    }
     
     ESP_LOGI(TAG, "ARP hosts screen created");
     return screen;
