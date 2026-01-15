@@ -284,11 +284,15 @@ static void on_key(screen_t *self, key_code_t key)
             if (data->entry_count > 0 && data->selected_index < data->entry_count) {
                 password_entry_t *entry = &data->entries[data->selected_index];
                 
-                // Create detail screen params
+                // Create detail screen params with connect credentials
                 data_detail_params_t *params = malloc(sizeof(data_detail_params_t));
                 if (params) {
+                    memset(params, 0, sizeof(data_detail_params_t));
                     snprintf(params->title, DETAIL_MAX_TITLE_LEN, "SSID: %s", entry->ssid);
                     snprintf(params->content, DETAIL_MAX_CONTENT_LEN, "Password: %s", entry->password);
+                    // Pass credentials for auto-connect feature
+                    strncpy(params->connect_ssid, entry->ssid, sizeof(params->connect_ssid) - 1);
+                    strncpy(params->connect_password, entry->password, sizeof(params->connect_password) - 1);
                     screen_manager_push(data_detail_screen_create, params);
                 }
             }
