@@ -1,6 +1,6 @@
 # M5MonsterC5-CardputerADV
 
-<img src="https://github.com/user-attachments/assets/ca844910-26de-4df7-9e49-e5623373dcc3" width="30%">
+<img alt="Zrzut ekranu 2026-01-16 o 21 21 41" src="https://github.com/user-attachments/assets/7d3689f8-049c-478a-a428-a4f81a8aa322" />
 
 ---
 
