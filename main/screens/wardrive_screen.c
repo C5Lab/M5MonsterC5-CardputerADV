@@ -6,6 +6,7 @@
 #include "wardrive_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
+#include "buzzer.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -263,6 +264,7 @@ screen_t* wardrive_screen_create(void *params)
     
     // Now send start_wardrive command
     uart_send_command("start_wardrive");
+    buzzer_beep_attack();
     
     ESP_LOGI(TAG, "Wardrive screen created");
     return screen;

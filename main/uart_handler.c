@@ -33,6 +33,9 @@ static char scan_status[64] = "Ready";
 // Mutex for thread safety
 static SemaphoreHandle_t uart_mutex = NULL;
 
+// WiFi client connection state
+static bool wifi_connected = false;
+
 // Line buffer
 static char line_buffer[1024];
 static int line_pos = 0;
@@ -297,6 +300,16 @@ bool uart_is_scanning(void)
 const char* uart_get_scan_status(void)
 {
     return scan_status;
+}
+
+bool uart_is_wifi_connected(void)
+{
+    return wifi_connected;
+}
+
+void uart_set_wifi_connected(bool connected)
+{
+    wifi_connected = connected;
 }
 
 

@@ -8,6 +8,7 @@
 #include "sniffer_probes_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
+#include "buzzer.h"
 #include "esp_log.h"
 #include <string.h>
 #include <stdlib.h>

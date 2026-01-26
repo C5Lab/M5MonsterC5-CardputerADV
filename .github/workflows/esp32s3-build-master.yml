@@ -38,7 +38,7 @@ jobs:
       contents: write
     runs-on: ubuntu-24.04
     container:
-      image: espressif/idf:v6.0-dev
+      image: espressif/idf:v6.0-beta1
     outputs:
       fw_version: ${{ steps.version.outputs.version }}
     steps:

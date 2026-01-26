@@ -14,10 +14,12 @@ static const char *TAG = "SETTINGS";
 #define NVS_NAMESPACE       "settings"
 #define NVS_KEY_UART_TX     "uart_tx"
 #define NVS_KEY_UART_RX     "uart_rx"
+#define NVS_KEY_RED_TEAM    "red_team"
 
 // Cached values
 static int uart_tx_pin = DEFAULT_UART_TX_PIN;
 static int uart_rx_pin = DEFAULT_UART_RX_PIN;
+static bool red_team_enabled = false;  // Default: disabled
 
 // Reserved GPIO pins that should not be used (ESP32-S3 specific)
 // These include strapping pins, flash/PSRAM pins, USB pins, etc.
@@ -97,6 +99,12 @@ esp_err_t settings_init(void)
             ESP_LOGI(TAG, "Loaded UART RX pin: %d", uart_rx_pin);
         }
         
+        uint8_t red_team_val = 0;
+        if (nvs_get_u8(handle, NVS_KEY_RED_TEAM, &red_team_val) == ESP_OK) {
+            red_team_enabled = (red_team_val != 0);
+            ESP_LOGI(TAG, "Loaded Red Team enabled: %s", red_team_enabled ? "true" : "false");
+        }
+        
         nvs_close(handle);
     } else if (ret == ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGI(TAG, "No settings found, using defaults (TX=%d, RX=%d)", 
@@ -170,6 +178,46 @@ esp_err_t settings_set_uart_pins(int tx_pin, int rx_pin)
     uart_rx_pin = rx_pin;
     
     ESP_LOGI(TAG, "UART pins saved (TX=%d, RX=%d) - restart required", tx_pin, rx_pin);
+    return ESP_OK;
+}
+
+bool settings_get_red_team_enabled(void)
+{
+    return red_team_enabled;
+}
+
+esp_err_t settings_set_red_team_enabled(bool enabled)
+{
+    // Open NVS for writing
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS for writing: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Write value
+    ret = nvs_set_u8(handle, NVS_KEY_RED_TEAM, enabled ? 1 : 0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write Red Team setting: %s", esp_err_to_name(ret));
+        nvs_close(handle);
+        return ret;
+    }
+    
+    // Commit
+    ret = nvs_commit(handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to commit NVS: %s", esp_err_to_name(ret));
+        nvs_close(handle);
+        return ret;
+    }
+    
+    nvs_close(handle);
+    
+    // Update cached value
+    red_team_enabled = enabled;
+    
+    ESP_LOGI(TAG, "Red Team setting saved: %s", enabled ? "enabled" : "disabled");
     return ESP_OK;
 }
 

@@ -6,6 +6,7 @@
 #include "global_handshaker_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
+#include "buzzer.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <string.h>
@@ -190,6 +191,7 @@ screen_t* global_handshaker_screen_create(void *params)
     
     // Send start_handshake command (no select_networks needed)
     uart_send_command("start_handshake");
+    buzzer_beep_attack();
     
     // Draw initial screen
     draw_screen(screen);

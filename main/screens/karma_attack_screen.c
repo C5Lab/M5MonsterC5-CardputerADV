@@ -6,6 +6,7 @@
 #include "karma_attack_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
+#include "buzzer.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <string.h>
@@ -109,6 +110,7 @@ static void uart_line_callback(const char *line, void *user_data)
         
         ESP_LOGI(TAG, "Password obtained: %s", data->password);
         data->needs_redraw = true;
+        buzzer_beep_capture();
         return;
     }
 }

@@ -130,7 +130,7 @@ static void draw_screen(screen_t *self)
         ui_print_center(3, "No probes found", UI_COLOR_DIMMED);
     } else {
         // Draw visible probes
-        int visible_rows = 5;
+        int visible_rows = 6;
         int start_row = 1;
         
         for (int i = 0; i < visible_rows; i++) {
@@ -173,7 +173,7 @@ static void on_tick(screen_t *self)
 static void on_key(screen_t *self, key_code_t key)
 {
     sniffer_probes_data_t *data = (sniffer_probes_data_t *)self->user_data;
-    int visible_rows = 5;
+    int visible_rows = 6;
     
     switch (key) {
         case KEY_UP:
@@ -187,11 +187,8 @@ static void on_key(screen_t *self, key_code_t key)
             
         case KEY_DOWN:
             if (data->scroll_offset + visible_rows < data->probe_count) {
-                // Page jump down
+                // Page jump down - don't adjust back for partial pages
                 data->scroll_offset += visible_rows;
-                int max_scroll = data->probe_count - visible_rows;
-                if (max_scroll < 0) max_scroll = 0;
-                if (data->scroll_offset > max_scroll) data->scroll_offset = max_scroll;
                 draw_screen(self);
             }
             break;

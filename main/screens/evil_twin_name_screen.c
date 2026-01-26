@@ -14,7 +14,7 @@
 static const char *TAG = "ET_NAME";
 
 // Maximum visible items
-#define VISIBLE_ITEMS   5
+#define VISIBLE_ITEMS   6
 
 // Screen user data
 typedef struct {

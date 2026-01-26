@@ -86,6 +86,8 @@ static void on_key(screen_t *self, key_code_t key)
                 const menu_item_t *item = &menu_items[data->selected_index];
                 if (item->create_fn) {
                     screen_manager_push(item->create_fn, NULL);
+                    // Immediately trigger first draw of new screen
+                    screen_manager_tick();
                 }
             }
             break;

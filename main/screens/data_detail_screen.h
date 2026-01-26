@@ -16,6 +16,9 @@
 typedef struct {
     char title[DETAIL_MAX_TITLE_LEN];      // SSID or header
     char content[DETAIL_MAX_CONTENT_LEN];  // Full content to display
+    // Optional: WiFi credentials for auto-connect feature
+    char connect_ssid[33];                 // If non-empty, enables Connect option
+    char connect_password[65];             // WiFi password for connect
 } data_detail_params_t;
 
 /**

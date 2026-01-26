@@ -85,6 +85,18 @@ bool uart_is_scanning(void);
  */
 const char* uart_get_scan_status(void);
 
+/**
+ * @brief Check if connected to WiFi (client mode)
+ * @return true if connected
+ */
+bool uart_is_wifi_connected(void);
+
+/**
+ * @brief Set WiFi connection state
+ * @param connected true if connected
+ */
+void uart_set_wifi_connected(bool connected);
+
 #endif // UART_HANDLER_H
 
 

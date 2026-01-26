@@ -131,9 +131,9 @@ static esp_err_t tca8418_init(void)
 {
     esp_err_t ret;
     
-    // Configure keyboard matrix - 8 rows x 10 columns
-    // Set rows 0-7 as keypad
-    ret = tca8418_write_reg(TCA8418_REG_KP_GPIO1, 0xFF);
+    // Configure keyboard matrix - 7 rows x 8 columns (same as M5Stack official)
+    // Set rows 0-6 as keypad (0x7F = 0b01111111)
+    ret = tca8418_write_reg(TCA8418_REG_KP_GPIO1, 0x7F);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write KP_GPIO1");
         return ret;
@@ -146,8 +146,8 @@ static esp_err_t tca8418_init(void)
         return ret;
     }
     
-    // Set cols 8-9 as keypad
-    ret = tca8418_write_reg(TCA8418_REG_KP_GPIO3, 0x03);
+    // No additional cols needed (was 8-9, now using only 0-7)
+    ret = tca8418_write_reg(TCA8418_REG_KP_GPIO3, 0x00);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write KP_GPIO3");
         return ret;
@@ -189,18 +189,24 @@ static esp_err_t tca8418_init(void)
  */
 static const key_code_t _key_value_map[4][14] = {
     // Row 0: ` 1 2 3 4 5 6 7 8 9 0 - = del
-    {KEY_ESC, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0, KEY_NONE, KEY_NONE, KEY_BACKSPACE},
+    {KEY_GRAVE, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0, KEY_MINUS, KEY_EQUAL, KEY_BACKSPACE},
     // Row 1: tab q w e r t y u i o p [ ] backslash
-    {KEY_TAB, KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P, KEY_NONE, KEY_NONE, KEY_NONE},
-    // Row 2: fn shift a s d f g h j k l ; ' enter (code 3=fn, code 7=shift)
-    {KEY_FN, KEY_SHIFT, KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L, KEY_NONE, KEY_NONE, KEY_ENTER},
+    {KEY_TAB, KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P, KEY_LBRACKET, KEY_RBRACKET, KEY_BACKSLASH},
+    // Row 2: shift capslock a s d f g h j k l ; ' enter
+    {KEY_SHIFT, KEY_CAPSLOCK, KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L, KEY_SEMICOLON, KEY_APOSTROPHE, KEY_ENTER},
     // Row 3: ctrl opt alt z x c v b n m , . / space
-    {KEY_CTRL, KEY_OPT, KEY_ALT, KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M, KEY_NONE, KEY_NONE, KEY_NONE, KEY_SPACE}
+    {KEY_CTRL, KEY_OPT, KEY_ALT, KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M, KEY_COMMA, KEY_DOT, KEY_SLASH, KEY_SPACE}
 };
 
-// Modifier key states
-static bool shift_held = false;
+// Modifier key states (tracked by raw key code)
+static bool fn_held = false;      // Fn key (raw code 3)
+static bool shift_held = false;   // Shift/Aa key (raw code 7)
 static bool ctrl_held = false;
+static bool capslock_state = false;
+
+// Text input mode - when true, arrow keys require Fn
+// When false (default), arrow keys work without Fn (for menu navigation)
+static bool text_input_mode = false;
 
 /**
  * @brief Remap TCA8418 raw coordinates to Cardputer layout
@@ -220,52 +226,6 @@ static void remap_key(uint8_t *row, uint8_t *col)
     
     *row = new_row;
     *col = new_col;
-}
-
-/**
- * @brief Convert TCA8418 key code to our key_code_t
- * Uses M5Stack official remap algorithm + special keys
- */
-static key_code_t tca8418_to_keycode(uint8_t key_code)
-{
-    if (key_code == 0) return KEY_NONE;
-    
-    // Special keys that are outside the standard 4x14 matrix
-    // These were confirmed by user testing
-    switch (key_code) {
-        case 57: return KEY_UP;
-        case 58: return KEY_DOWN;
-        case 56: return KEY_LEFT;
-        case 59: return KEY_RIGHT;
-    }
-    
-    // Parse raw code to row/col
-    // Formula: key_code = (row * 10) + col + 1
-    uint16_t buffer = key_code;
-    buffer--;
-    uint8_t raw_row = buffer / 10;
-    uint8_t raw_col = buffer % 10;
-    
-    // Apply remap (from M5Stack official code)
-    uint8_t row = raw_row;
-    uint8_t col = raw_col;
-    remap_key(&row, &col);
-    
-    // Bounds check
-    if (row >= 4 || col >= 14) {
-        ESP_LOGW(TAG, "Key out of bounds: code=%d raw(%d,%d) -> (%d,%d)", 
-                 key_code, raw_row, raw_col, row, col);
-        return KEY_NONE;
-    }
-    
-    key_code_t result = _key_value_map[row][col];
-    
-    if (result == KEY_NONE) {
-        ESP_LOGD(TAG, "Unmapped key: code=%d raw(%d,%d) -> (%d,%d)", 
-                 key_code, raw_row, raw_col, row, col);
-    }
-    
-    return result;
 }
 
 esp_err_t keyboard_init(void)
@@ -323,6 +283,44 @@ esp_err_t keyboard_init(void)
     return ESP_OK;
 }
 
+/**
+ * @brief Update modifier state based on raw key code
+ * Fn=3, Shift=7 determined by hardware testing
+ */
+static void update_modifier_state_by_code(uint8_t raw_key_code, bool pressed)
+{
+    switch (raw_key_code) {
+        case 3:  // Fn key
+            fn_held = pressed;
+            ESP_LOGI(TAG, "Fn %s", pressed ? "HELD" : "released");
+            break;
+        case 7:  // Shift/Aa key
+            shift_held = pressed;
+            ESP_LOGI(TAG, "Shift %s", pressed ? "HELD" : "released");
+            break;
+    }
+}
+
+/**
+ * @brief Update modifier mask based on key position
+ * For Ctrl and Capslock which are in the matrix
+ */
+static void update_modifier_state(uint8_t row, uint8_t col, bool pressed)
+{
+    // Ctrl key at position (3, 0)
+    if (row == 3 && col == 0) {
+        ctrl_held = pressed;
+        ESP_LOGD(TAG, "Ctrl %s", pressed ? "pressed" : "released");
+    }
+    
+    // Capslock key at position (2, 1) - but on Cardputer ADV this might be different
+    // Will track by position for now
+    if (row == 2 && col == 1) {
+        capslock_state = pressed;
+        ESP_LOGD(TAG, "Capslock %s", pressed ? "pressed" : "released");
+    }
+}
+
 static void scan_keyboard(void)
 {
     if (!keyboard_initialized) return;
@@ -340,24 +338,91 @@ static void scan_keyboard(void)
         ret = tca8418_read_reg(TCA8418_REG_KEY_EVENT_A, &key_event);
         if (ret != ESP_OK || key_event == 0) break;
         
-        uint8_t key_code = key_event & TCA8418_KEY_EVENT_CODE_MASK;
+        uint8_t raw_key_code = key_event & TCA8418_KEY_EVENT_CODE_MASK;
         bool pressed = (key_event & TCA8418_KEY_EVENT_PRESSED) != 0;
         
-        ESP_LOGI(TAG, "Key event: code=%d, %s", key_code, pressed ? "PRESSED" : "released");
+        ESP_LOGI(TAG, "Key event: code=%d, %s", raw_key_code, pressed ? "PRESSED" : "released");
         
-        key_code_t key = tca8418_to_keycode(key_code);
+        // First, update modifier state by raw code (Fn=3, Shift=7)
+        update_modifier_state_by_code(raw_key_code, pressed);
         
-        // Track modifier key states (press and release)
-        if (key == KEY_SHIFT) {
-            shift_held = pressed;
-            ESP_LOGI(TAG, "Shift %s", pressed ? "pressed" : "released");
-        }
-        if (key == KEY_CTRL) {
-            ctrl_held = pressed;
-            ESP_LOGI(TAG, "Ctrl %s", pressed ? "pressed" : "released");
+        // Skip processing for pure modifier keys (Fn=3, Shift=7)
+        if (raw_key_code == 3 || raw_key_code == 7) {
+            continue;  // Don't send modifier keys as key events
         }
         
-        if (pressed && key != KEY_NONE && key != KEY_SHIFT && key != KEY_CTRL) {
+        key_code_t key = KEY_NONE;
+        uint8_t row = 0, col = 0;
+        bool is_arrow_key = false;
+        bool is_special_fn_key = false;
+        
+        // ` key (code 1) = ESC
+        // In text_input_mode: requires Fn (without Fn = ` character)
+        // In navigation mode: ESC works without Fn
+        if (raw_key_code == 1) {
+            bool esc_active = text_input_mode ? fn_held : true;
+            if (esc_active) {
+                key = KEY_ESC;
+                is_special_fn_key = true;
+            }
+        }
+        
+        // Arrow keys: codes 54/57/58/64
+        // In text_input_mode: arrows require Fn, without Fn = characters
+        // In navigation mode (default): arrows work without Fn
+        bool arrow_active = text_input_mode ? fn_held : true;
+        
+        if (arrow_active) {
+            switch (raw_key_code) {
+                case 57:  // ; or UP arrow
+                    key = KEY_UP;
+                    is_arrow_key = true;
+                    break;
+                case 58:  // . or DOWN arrow  
+                    key = KEY_DOWN;
+                    is_arrow_key = true;
+                    break;
+                case 54:  // , or LEFT arrow
+                    key = KEY_LEFT;
+                    is_arrow_key = true;
+                    break;
+                case 64:  // / or RIGHT arrow
+                    key = KEY_RIGHT;
+                    is_arrow_key = true;
+                    break;
+            }
+        }
+        
+        // Parse normal matrix keys (including 54/57/58/64 when Fn not held)
+        if (!is_arrow_key && !is_special_fn_key && raw_key_code > 0) {
+            uint16_t buffer = raw_key_code;
+            buffer--;
+            uint8_t raw_row = buffer / 10;
+            uint8_t raw_col = buffer % 10;
+            
+            // Normal matrix key - apply remap
+            row = raw_row;
+            col = raw_col;
+            remap_key(&row, &col);
+            
+            // Update modifier state by position (Ctrl, Capslock)
+            update_modifier_state(row, col, pressed);
+            
+            // Bounds check
+            if (row < 4 && col < 14) {
+                key = _key_value_map[row][col];
+            } else {
+                ESP_LOGW(TAG, "Key out of bounds: code=%d raw(%d,%d) -> (%d,%d)", 
+                         raw_key_code, raw_row, raw_col, row, col);
+            }
+        }
+        
+        // Check if this is a modifier key (don't send as regular key event)
+        bool is_modifier = !is_arrow_key && (
+                          (row == 3 && col == 0));   // Ctrl only
+        
+        // Send non-modifier key press events
+        if (pressed && key != KEY_NONE && !is_modifier) {
             last_key = key;
             xQueueSend(key_queue, &key, 0);
             
@@ -409,4 +474,20 @@ bool keyboard_is_shift_held(void)
 bool keyboard_is_ctrl_held(void)
 {
     return ctrl_held;
+}
+
+bool keyboard_is_capslock_held(void)
+{
+    return capslock_state;
+}
+
+bool keyboard_is_fn_held(void)
+{
+    return fn_held;
+}
+
+void keyboard_set_text_input_mode(bool enabled)
+{
+    text_input_mode = enabled;
+    ESP_LOGI(TAG, "Text input mode: %s", enabled ? "ON" : "OFF");
 }

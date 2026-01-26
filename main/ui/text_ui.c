@@ -128,14 +128,13 @@ void ui_draw_line(int row, uint16_t color)
 }
 
 /**
- * @brief Draw battery icon with level indicator and voltage
+ * @brief Draw battery icon with level indicator (icon only, no voltage text)
  * @param x X position (right edge of icon)
  * @param y Y position
  * @param level Battery level 0-100
- * @param voltage_mv Battery voltage in millivolts
  * @param bg Background color
  */
-static void draw_battery_icon(int x, int y, int level, int voltage_mv, uint16_t bg)
+static void draw_battery_icon(int x, int y, int level, uint16_t bg)
 {
     // Battery icon dimensions
     const int bat_width = 18;
@@ -173,8 +172,15 @@ static void draw_battery_icon(int x, int y, int level, int voltage_mv, uint16_t 
     if (fill_width > 0) {
         display_fill_rect(bx + 2, by + 2, fill_width, bat_height - 4, fill_color);
     }
-    
-    // Draw voltage text to the left of battery icon (e.g. "4.12V")
+}
+
+/**
+ * @brief Draw voltage text in the top left corner
+ * @param voltage_mv Battery voltage in millivolts
+ * @param bg Background color
+ */
+static void draw_voltage_text(int voltage_mv, uint16_t bg)
+{
     char volt_str[12];
     if (voltage_mv > 0 && voltage_mv < 10000) {
         int volts = voltage_mv / 1000;
@@ -183,11 +189,9 @@ static void draw_battery_icon(int x, int y, int level, int voltage_mv, uint16_t 
     } else {
         snprintf(volt_str, sizeof(volt_str), "?.??V");
     }
-    int text_len = strlen(volt_str);
-    int text_x = bx - (text_len * FONT_WIDTH) - 2;
     
-    // Draw voltage text (vertically centered)
-    ui_draw_text(text_x, y - 2, volt_str, UI_COLOR_DIMMED, bg);
+    // Draw in top left corner with small margin
+    ui_draw_text(2, 1, volt_str, UI_COLOR_DIMMED, bg);
 }
 
 void ui_draw_title(const char *title)
@@ -204,12 +208,14 @@ void ui_draw_title(const char *title)
         ui_draw_text(x, 1, title, UI_COLOR_TITLE, title_bg);
     }
     
-    // Draw battery indicator on the right side (uses cached values, refreshed every 30s)
+    // Draw battery indicators (uses cached values, refreshed every 30s)
     if (battery_is_available()) {
         update_battery_cache();
         if (cached_level >= 0 && cached_voltage_mv > 0) {
-            // Position battery icon at right edge with some margin
-            draw_battery_icon(DISPLAY_WIDTH - 4, 4, cached_level, cached_voltage_mv, title_bg);
+            // Voltage text in top left corner
+            draw_voltage_text(cached_voltage_mv, title_bg);
+            // Battery icon at right edge
+            draw_battery_icon(DISPLAY_WIDTH - 4, 4, cached_level, title_bg);
         }
     }
     

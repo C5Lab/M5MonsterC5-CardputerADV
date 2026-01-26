@@ -262,14 +262,8 @@ static void on_key(screen_t *self, key_code_t key)
                     
                     // Check if at last visible item on page - do page jump
                     if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
-                        // Jump to next page
+                        // Jump to next page - don't adjust back for partial pages
                         data->scroll_offset += VISIBLE_ITEMS;
-                        // Clamp scroll_offset to valid range
-                        int max_scroll = data->count - VISIBLE_ITEMS;
-                        if (max_scroll < 0) max_scroll = 0;
-                        if (data->scroll_offset > max_scroll) {
-                            data->scroll_offset = max_scroll;
-                        }
                         // Set cursor to top of new page
                         data->selected_index = data->scroll_offset;
                         redraw_list(data);  // Full page redraw

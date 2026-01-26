@@ -3,10 +3,12 @@
  * @brief Detail view screen for displaying full text content with scrolling
  * 
  * Displays a title (SSID) and full content with automatic line wrapping
- * and vertical scrolling support.
+ * and vertical scrolling support. Optionally supports WiFi auto-connect.
  */
 
 #include "data_detail_screen.h"
+#include "arp_hosts_screen.h"
+#include "uart_handler.h"
 #include "text_ui.h"
 #include "esp_log.h"
 #include <string.h>
@@ -19,13 +21,32 @@ static const char *TAG = "DATA_DETAIL";
 #define CONTENT_ROWS    5   // Rows available for content (rows 1-5, row 0=title, row 7=status)
 #define MAX_LINES       32  // Maximum wrapped lines to support
 
+// Screen states
+typedef enum {
+    STATE_VIEW,
+    STATE_CONNECTING,
+    STATE_RESULT
+} detail_state_t;
+
 // Screen user data
 typedef struct {
     char title[DETAIL_MAX_TITLE_LEN];
     char *lines[MAX_LINES];  // Pointers to wrapped lines
     int line_count;
     int scroll_offset;
+    // Connect feature
+    char connect_ssid[33];
+    char connect_password[65];
+    bool has_connect;
+    detail_state_t state;
+    bool connect_success;
+    char result_msg[64];
+    bool needs_redraw;
+    screen_t *self;
 } data_detail_data_t;
+
+// Forward declarations
+static void draw_screen(screen_t *self);
 
 /**
  * @brief Wrap content into lines
@@ -124,6 +145,34 @@ static void wrap_content(data_detail_data_t *data, const char *content)
     free(work);
 }
 
+/**
+ * @brief UART callback for WiFi connection result
+ */
+static void uart_line_callback(const char *line, void *user_data)
+{
+    data_detail_data_t *data = (data_detail_data_t *)user_data;
+    if (!data || data->state != STATE_CONNECTING) return;
+    
+    // Check for success
+    if (strstr(line, "SUCCESS:") != NULL && strstr(line, "Connected") != NULL) {
+        data->connect_success = true;
+        snprintf(data->result_msg, sizeof(data->result_msg), "Connected!");
+        data->state = STATE_RESULT;
+        uart_set_wifi_connected(true);
+        data->needs_redraw = true;
+        ESP_LOGI(TAG, "WiFi connected successfully");
+    }
+    // Check for failure
+    else if (strstr(line, "FAILED:") != NULL) {
+        data->connect_success = false;
+        snprintf(data->result_msg, sizeof(data->result_msg), "Connection failed");
+        data->state = STATE_RESULT;
+        uart_set_wifi_connected(false);
+        data->needs_redraw = true;
+        ESP_LOGW(TAG, "WiFi connection failed");
+    }
+}
+
 static void draw_screen(screen_t *self)
 {
     data_detail_data_t *data = (data_detail_data_t *)self->user_data;
@@ -135,6 +184,28 @@ static void draw_screen(screen_t *self)
     snprintf(title_display, sizeof(title_display), "%.28s", data->title);
     ui_draw_title(title_display);
     
+    if (data->state == STATE_CONNECTING) {
+        // Show connecting status
+        ui_print_center(2, data->connect_ssid, UI_COLOR_HIGHLIGHT);
+        ui_print_center(4, "Connecting...", UI_COLOR_DIMMED);
+        ui_draw_status("Please wait...");
+        return;
+    }
+    
+    if (data->state == STATE_RESULT) {
+        // Show result
+        ui_print_center(2, data->connect_ssid, UI_COLOR_HIGHLIGHT);
+        if (data->connect_success) {
+            ui_print_center(4, data->result_msg, UI_COLOR_HIGHLIGHT);
+            ui_print_center(5, "ENTER: ARP Menu", UI_COLOR_TEXT);
+        } else {
+            ui_print_center(4, data->result_msg, UI_COLOR_TEXT);
+        }
+        ui_draw_status("ENTER:Continue ESC:Back");
+        return;
+    }
+    
+    // STATE_VIEW - normal content display
     if (data->line_count == 0) {
         ui_print_center(3, "No data", UI_COLOR_DIMMED);
     } else {
@@ -157,11 +228,23 @@ static void draw_screen(screen_t *self)
         }
     }
     
-    // Draw status bar
-    if (data->line_count > CONTENT_ROWS) {
+    // Draw status bar based on features
+    if (data->has_connect) {
+        ui_draw_status("ENTER:Connect ESC:Back");
+    } else if (data->line_count > CONTENT_ROWS) {
         ui_draw_status("UP/DOWN:Scroll ESC:Back");
     } else {
         ui_draw_status("ESC:Back");
+    }
+}
+
+static void on_tick(screen_t *self)
+{
+    data_detail_data_t *data = (data_detail_data_t *)self->user_data;
+    
+    if (data->needs_redraw) {
+        data->needs_redraw = false;
+        draw_screen(self);
     }
 }
 
@@ -169,6 +252,35 @@ static void on_key(screen_t *self, key_code_t key)
 {
     data_detail_data_t *data = (data_detail_data_t *)self->user_data;
     
+    // Handle result state
+    if (data->state == STATE_RESULT) {
+        if (key == KEY_ENTER || key == KEY_SPACE) {
+            if (data->connect_success) {
+                // Push ARP hosts screen
+                uart_clear_line_callback();
+                screen_manager_push(arp_hosts_screen_create, NULL);
+            } else {
+                // Go back to view state
+                data->state = STATE_VIEW;
+                draw_screen(self);
+            }
+        } else if (key == KEY_ESC || key == KEY_BACKSPACE) {
+            screen_manager_pop();
+        }
+        return;
+    }
+    
+    // Handle connecting state - ignore most keys
+    if (data->state == STATE_CONNECTING) {
+        if (key == KEY_ESC) {
+            // Cancel and go back
+            uart_clear_line_callback();
+            screen_manager_pop();
+        }
+        return;
+    }
+    
+    // Handle view state
     switch (key) {
         case KEY_UP:
             if (data->scroll_offset > 0) {
@@ -181,6 +293,25 @@ static void on_key(screen_t *self, key_code_t key)
             if (data->scroll_offset + CONTENT_ROWS < data->line_count) {
                 data->scroll_offset++;
                 draw_screen(self);
+            }
+            break;
+            
+        case KEY_ENTER:
+        case KEY_SPACE:
+            if (data->has_connect) {
+                // Start WiFi connection
+                ESP_LOGI(TAG, "Connecting to %s...", data->connect_ssid);
+                data->state = STATE_CONNECTING;
+                draw_screen(self);
+                
+                // Register UART callback
+                uart_register_line_callback(uart_line_callback, data);
+                
+                // Send connect command
+                char cmd[128];
+                snprintf(cmd, sizeof(cmd), "wifi_connect %s %s", 
+                         data->connect_ssid, data->connect_password);
+                uart_send_command(cmd);
             }
             break;
             
@@ -199,6 +330,9 @@ static void on_destroy(screen_t *self)
 {
     data_detail_data_t *data = (data_detail_data_t *)self->user_data;
     
+    // Clear UART callback if we registered one
+    uart_clear_line_callback();
+    
     if (data) {
         // Free all wrapped lines
         for (int i = 0; i < data->line_count; i++) {
@@ -208,6 +342,12 @@ static void on_destroy(screen_t *self)
         }
         free(data);
     }
+}
+
+static void on_resume(screen_t *self)
+{
+    // Redraw when returning from ARP screen
+    draw_screen(self);
 }
 
 screen_t* data_detail_screen_create(void *params)
@@ -234,12 +374,25 @@ screen_t* data_detail_screen_create(void *params)
         return NULL;
     }
     
+    data->self = screen;
+    data->state = STATE_VIEW;
+    
     // Copy title
     strncpy(data->title, detail_params->title, DETAIL_MAX_TITLE_LEN - 1);
     data->title[DETAIL_MAX_TITLE_LEN - 1] = '\0';
     
     // Wrap content into lines
     wrap_content(data, detail_params->content);
+    
+    // Copy connect credentials if provided
+    if (detail_params->connect_ssid[0] != '\0') {
+        strncpy(data->connect_ssid, detail_params->connect_ssid, sizeof(data->connect_ssid) - 1);
+        data->connect_ssid[sizeof(data->connect_ssid) - 1] = '\0';
+        strncpy(data->connect_password, detail_params->connect_password, sizeof(data->connect_password) - 1);
+        data->connect_password[sizeof(data->connect_password) - 1] = '\0';
+        data->has_connect = true;
+        ESP_LOGI(TAG, "Connect feature enabled for SSID: %s", data->connect_ssid);
+    }
     
     // Free params (we've copied what we need)
     free(detail_params);
@@ -248,6 +401,8 @@ screen_t* data_detail_screen_create(void *params)
     screen->on_key = on_key;
     screen->on_destroy = on_destroy;
     screen->on_draw = draw_screen;
+    screen->on_tick = on_tick;
+    screen->on_resume = on_resume;
     
     // Draw initial screen
     draw_screen(screen);
@@ -255,6 +410,3 @@ screen_t* data_detail_screen_create(void *params)
     ESP_LOGI(TAG, "Data detail screen created with %d lines", data->line_count);
     return screen;
 }
-
-
-

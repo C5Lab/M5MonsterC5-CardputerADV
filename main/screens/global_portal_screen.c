@@ -6,6 +6,7 @@
 #include "global_portal_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
+#include "buzzer.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <string.h>
@@ -70,6 +71,7 @@ static void uart_line_callback(const char *line, void *user_data)
         
         data->submission_count++;
         data->needs_redraw = true;
+        buzzer_beep_capture();
         ESP_LOGI(TAG, "Password captured #%d: %s", data->submission_count, data->last_data);
         return;
     }
@@ -89,6 +91,7 @@ static void uart_line_callback(const char *line, void *user_data)
         
         data->submission_count++;
         data->needs_redraw = true;
+        buzzer_beep_capture();
         ESP_LOGI(TAG, "Form data captured #%d: %s", data->submission_count, data->last_data);
         return;
     }
@@ -100,6 +103,7 @@ static void uart_line_callback(const char *line, void *user_data)
         }
         data->submission_count++;
         data->needs_redraw = true;
+        buzzer_beep_capture();
         ESP_LOGI(TAG, "Portal data saved, submission #%d", data->submission_count);
     }
     

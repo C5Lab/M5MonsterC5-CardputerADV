@@ -7,6 +7,7 @@
 #include "evil_twin_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
+#include "buzzer.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <string.h>
@@ -17,7 +18,7 @@ static const char *TAG = "HTML_SEL";
 
 // Maximum HTML files and visible items
 #define MAX_HTML_FILES  24
-#define VISIBLE_ITEMS   5
+#define VISIBLE_ITEMS   6
 #define MAX_FILENAME_LEN 32
 
 // Screen user data
@@ -176,6 +177,7 @@ static void launch_evil_twin(html_select_screen_data_t *data)
     
     // Send start_evil_twin command
     uart_send_command("start_evil_twin");
+    buzzer_beep_attack();
     
     // Create evil twin screen params
     evil_twin_screen_params_t *params = malloc(sizeof(evil_twin_screen_params_t));
@@ -256,10 +258,8 @@ static void on_key(screen_t *self, key_code_t key)
                 
                 // Check if at last visible item on page - do page jump
                 if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
+                    // Jump to next page - don't adjust back for partial pages
                     data->scroll_offset += VISIBLE_ITEMS;
-                    int max_scroll = data->file_count - VISIBLE_ITEMS;
-                    if (max_scroll < 0) max_scroll = 0;
-                    if (data->scroll_offset > max_scroll) data->scroll_offset = max_scroll;
                     data->selected_index = data->scroll_offset;
                     draw_screen(self);
                 } else {

@@ -21,7 +21,7 @@ static const char *TAG = "PORTAL_DATA";
 #define MAX_ENTRIES     32
 #define MAX_SSID_LEN    33
 #define MAX_DATA_LEN    128  // Combined data fields
-#define VISIBLE_ITEMS   5
+#define VISIBLE_ITEMS   6
 
 // Portal data entry
 typedef struct {
@@ -37,6 +37,8 @@ typedef struct {
     int scroll_offset;
     bool loading;
     bool needs_redraw;
+    bool first_draw_done;
+    int ticks_since_first_draw;  // Block redraws shortly after first render
 } portal_data_data_t;
 
 // Forward declaration
@@ -118,7 +120,9 @@ static void uart_line_callback(const char *line, void *user_data)
     if (strstr(line, "No ") != NULL || strstr(line, "no ") != NULL || 
         strstr(line, "empty") != NULL || strstr(line, "Empty") != NULL) {
         data->loading = false;
-        data->needs_redraw = true;
+        if (data->first_draw_done) {
+            data->needs_redraw = true;
+        }
         return;
     }
     
@@ -147,7 +151,9 @@ static void uart_line_callback(const char *line, void *user_data)
         ESP_LOGI(TAG, "Parsed: SSID='%s', data='%s'", entry->ssid, entry->data);
         data->entry_count++;
         data->loading = false;
-        data->needs_redraw = true;
+        if (data->first_draw_done) {
+            data->needs_redraw = true;
+        }
     }
 }
 
@@ -202,6 +208,23 @@ static void on_tick(screen_t *self)
 {
     portal_data_data_t *data = (portal_data_data_t *)self->user_data;
     
+    // First tick after creation - do the initial draw with whatever data we have
+    if (!data->first_draw_done) {
+        data->first_draw_done = true;
+        data->ticks_since_first_draw = 0;
+        data->needs_redraw = false;
+        draw_screen(self);
+        return;
+    }
+    
+    data->ticks_since_first_draw++;
+    
+    // Block redraws for 2 ticks after first render to avoid double draw
+    if (data->ticks_since_first_draw <= 2) {
+        data->needs_redraw = false;
+        return;
+    }
+    
     if (data->needs_redraw) {
         data->needs_redraw = false;
         draw_screen(self);
@@ -248,10 +271,8 @@ static void on_key(screen_t *self, key_code_t key)
                 int old_idx = data->selected_index;
                 // Check if at last visible item on page - do page jump
                 if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
+                    // Jump to next page - don't adjust back for partial pages
                     data->scroll_offset += VISIBLE_ITEMS;
-                    int max_scroll = data->entry_count - VISIBLE_ITEMS;
-                    if (max_scroll < 0) max_scroll = 0;
-                    if (data->scroll_offset > max_scroll) data->scroll_offset = max_scroll;
                     data->selected_index = data->scroll_offset;
                     draw_screen(self);  // Full redraw on page jump
                 } else {
@@ -307,6 +328,11 @@ static void on_destroy(screen_t *self)
     }
 }
 
+static void on_resume(screen_t *self)
+{
+    draw_screen(self);
+}
+
 screen_t* portal_data_screen_create(void *params)
 {
     (void)params;
@@ -323,21 +349,18 @@ screen_t* portal_data_screen_create(void *params)
     }
     
     data->loading = true;
+    data->first_draw_done = false;
     
     screen->user_data = data;
     screen->on_key = on_key;
     screen->on_destroy = on_destroy;
+    screen->on_resume = on_resume;
     screen->on_draw = draw_screen;
     screen->on_tick = on_tick;
     
-    // Register UART callback
+    // Register UART callback and send command BEFORE any draw
     uart_register_line_callback(uart_line_callback, data);
-    
-    // Send command
     uart_send_command("show_pass portal");
-    
-    // Draw initial screen
-    draw_screen(screen);
     
     ESP_LOGI(TAG, "Portal data screen created");
     return screen;

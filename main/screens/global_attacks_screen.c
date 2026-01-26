@@ -11,12 +11,42 @@
 #include "sniffer_dog_screen.h"
 #include "wardrive_screen.h"
 #include "placeholder_screen.h"
+#include "settings.h"
 #include "text_ui.h"
 #include "esp_log.h"
 #include <string.h>
 #include <stdlib.h>
 
 static const char *TAG = "GLOBAL_ATK";
+
+// Global attack type identifiers
+typedef enum {
+    GLOBAL_ATK_BLACKOUT,
+    GLOBAL_ATK_HANDSHAKER,
+    GLOBAL_ATK_PORTAL,
+    GLOBAL_ATK_SNIFFER_DOG,
+    GLOBAL_ATK_WARDRIVE,
+    GLOBAL_ATK_COUNT
+} global_attack_type_t;
+
+// Attack menu item definition
+typedef struct {
+    const char *name;
+    global_attack_type_t type;
+    bool requires_red_team;
+} global_attack_def_t;
+
+// All available global attacks with red team requirements
+static const global_attack_def_t all_global_attacks[] = {
+    {"Blackout",    GLOBAL_ATK_BLACKOUT,     true},
+    {"Handshaker",  GLOBAL_ATK_HANDSHAKER,   true},
+    {"Portal",      GLOBAL_ATK_PORTAL,       false},
+    {"Sniffer Dog", GLOBAL_ATK_SNIFFER_DOG,  true},
+    {"Wardrive",    GLOBAL_ATK_WARDRIVE,     false},
+};
+
+#define ALL_GLOBAL_ATTACKS_COUNT (sizeof(all_global_attacks) / sizeof(all_global_attacks[0]))
+#define MAX_VISIBLE_GLOBAL_ATTACKS 5
 
 /**
  * @brief Callback when portal SSID is entered
@@ -39,20 +69,13 @@ static void on_portal_ssid_entered(const char *ssid, void *user_data)
     }
 }
 
-// Menu items
-static const char *menu_items[] = {
-    "Blackout",
-    "Handshaker",
-    "Portal",
-    "Sniffer Dog",
-    "Wardrive",
-};
-
-#define MENU_ITEM_COUNT (sizeof(menu_items) / sizeof(menu_items[0]))
-
 // Screen user data
 typedef struct {
     int selected_index;
+    // Dynamic filtered menu
+    global_attack_type_t visible_attacks[MAX_VISIBLE_GLOBAL_ATTACKS];
+    const char *visible_names[MAX_VISIBLE_GLOBAL_ATTACKS];
+    int visible_count;
 } global_attacks_data_t;
 
 static void draw_screen(screen_t *self)
@@ -61,12 +84,12 @@ static void draw_screen(screen_t *self)
     
     ui_clear();
     
-    // Draw title
-    ui_draw_title("Global WiFi Attacks");
+    // Draw title - use "Tests" when red team disabled
+    ui_draw_title(settings_get_red_team_enabled() ? "Global WiFi Attacks" : "Global WiFi Tests");
     
-    // Draw menu items
-    for (int i = 0; i < MENU_ITEM_COUNT; i++) {
-        ui_draw_menu_item(i + 1, menu_items[i], i == data->selected_index, false, false);
+    // Draw visible menu items
+    for (int i = 0; i < data->visible_count; i++) {
+        ui_draw_menu_item(i + 1, data->visible_names[i], i == data->selected_index, false, false);
     }
     
     // Draw status bar
@@ -76,8 +99,8 @@ static void draw_screen(screen_t *self)
 // Optimized: redraw only two changed rows
 static void redraw_selection(global_attacks_data_t *data, int old_index, int new_index)
 {
-    ui_draw_menu_item(old_index + 1, menu_items[old_index], false, false, false);
-    ui_draw_menu_item(new_index + 1, menu_items[new_index], true, false, false);
+    ui_draw_menu_item(old_index + 1, data->visible_names[old_index], false, false, false);
+    ui_draw_menu_item(new_index + 1, data->visible_names[new_index], true, false, false);
 }
 
 static void on_key(screen_t *self, key_code_t key)
@@ -94,7 +117,7 @@ static void on_key(screen_t *self, key_code_t key)
             break;
             
         case KEY_DOWN:
-            if (data->selected_index < MENU_ITEM_COUNT - 1) {
+            if (data->selected_index < data->visible_count - 1) {
                 int old = data->selected_index;
                 data->selected_index++;
                 redraw_selection(data, old, data->selected_index);
@@ -104,14 +127,19 @@ static void on_key(screen_t *self, key_code_t key)
         case KEY_ENTER:
         case KEY_SPACE:
             {
-                switch (data->selected_index) {
-                    case 0:  // Blackout
+                // Get the actual attack type from the filtered list
+                global_attack_type_t attack = data->visible_attacks[data->selected_index];
+                
+                switch (attack) {
+                    case GLOBAL_ATK_BLACKOUT:
                         screen_manager_push(blackout_screen_create, NULL);
                         break;
-                    case 1:  // Handshaker
+                        
+                    case GLOBAL_ATK_HANDSHAKER:
                         screen_manager_push(global_handshaker_screen_create, NULL);
                         break;
-                    case 2:  // Portal
+                        
+                    case GLOBAL_ATK_PORTAL:
                         {
                             text_input_params_t *params = malloc(sizeof(text_input_params_t));
                             if (params) {
@@ -123,11 +151,16 @@ static void on_key(screen_t *self, key_code_t key)
                             }
                         }
                         break;
-                    case 3:  // Sniffer Dog
+                        
+                    case GLOBAL_ATK_SNIFFER_DOG:
                         screen_manager_push(sniffer_dog_screen_create, NULL);
                         break;
-                    case 4:  // Wardrive
+                        
+                    case GLOBAL_ATK_WARDRIVE:
                         screen_manager_push(wardrive_screen_create, NULL);
+                        break;
+                        
+                    default:
                         break;
                 }
             }
@@ -156,6 +189,26 @@ static void on_resume(screen_t *self)
     draw_screen(self);
 }
 
+static void build_visible_global_attacks(global_attacks_data_t *data)
+{
+    bool red_team = settings_get_red_team_enabled();
+    data->visible_count = 0;
+    
+    for (int i = 0; i < (int)ALL_GLOBAL_ATTACKS_COUNT && data->visible_count < MAX_VISIBLE_GLOBAL_ATTACKS; i++) {
+        // Skip red team attacks if not enabled
+        if (all_global_attacks[i].requires_red_team && !red_team) {
+            continue;
+        }
+        
+        data->visible_attacks[data->visible_count] = all_global_attacks[i].type;
+        data->visible_names[data->visible_count] = all_global_attacks[i].name;
+        data->visible_count++;
+    }
+    
+    ESP_LOGI(TAG, "Built global attack menu with %d visible items (red_team=%d)", 
+             data->visible_count, red_team);
+}
+
 screen_t* global_attacks_screen_create(void *params)
 {
     (void)params;
@@ -171,6 +224,9 @@ screen_t* global_attacks_screen_create(void *params)
         free(screen);
         return NULL;
     }
+    
+    // Build filtered attack list based on red team setting
+    build_visible_global_attacks(data);
     
     screen->user_data = data;
     screen->on_key = on_key;

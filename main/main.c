@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_timer.h"
 
 #include "display.h"
 #include "keyboard.h"
@@ -17,8 +18,12 @@
 #include "screenshot.h"
 #include "battery.h"
 #include "settings.h"
+#include "buzzer.h"
 
-#define JANOS_ADV_VERSION "1.1.1"
+#define JANOS_ADV_VERSION "1.3.5"
+
+// Screen timeout configuration
+#define SCREEN_TIMEOUT_MS  30000  // 30 seconds
 
 static const char *TAG = "MAIN";
 
@@ -82,6 +87,16 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "UART handler initialized successfully");
 
+    // Initialize buzzer
+    ESP_LOGI(TAG, "Initializing buzzer...");
+    ret = buzzer_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Buzzer initialization failed - audio disabled");
+        // Continue anyway - buzzer is optional
+    } else {
+        ESP_LOGI(TAG, "Buzzer initialized successfully");
+    }
+
     // Initialize screen manager
     ESP_LOGI(TAG, "Initializing screen manager...");
     screen_manager_init();
@@ -95,8 +110,33 @@ void app_main(void)
 
     // Main loop - process keyboard input and periodic screen updates
     int tick_counter = 0;
+    bool screen_dimmed = false;
+    int64_t last_activity_time = esp_timer_get_time() / 1000;  // Convert to ms
+    
     while (1) {
         keyboard_process();
+        
+        // Check for any key activity
+        key_code_t key = keyboard_get_key();
+        if (key != KEY_NONE) {
+            // Reset activity timer on any keypress
+            last_activity_time = esp_timer_get_time() / 1000;
+            
+            // Wake screen if dimmed
+            if (screen_dimmed) {
+                display_set_backlight(100);
+                screen_dimmed = false;
+                ESP_LOGI(TAG, "Screen woken by keypress");
+            }
+        }
+        
+        // Check for screen timeout
+        int64_t now = esp_timer_get_time() / 1000;
+        if (!screen_dimmed && (now - last_activity_time) > SCREEN_TIMEOUT_MS) {
+            display_set_backlight(0);
+            screen_dimmed = true;
+            ESP_LOGI(TAG, "Screen dimmed due to inactivity");
+        }
         
         // Call screen tick every 500ms (50 * 10ms) for responsive UI updates
         if (++tick_counter >= 50) {

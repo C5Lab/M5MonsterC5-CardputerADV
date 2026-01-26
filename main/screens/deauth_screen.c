@@ -13,7 +13,7 @@
 static const char *TAG = "DEAUTH";
 
 // Maximum visible items
-#define VISIBLE_ITEMS   5
+#define VISIBLE_ITEMS   6
 
 // Screen user data
 typedef struct {

@@ -6,6 +6,7 @@
 #include "blackout_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
+#include "buzzer.h"
 #include "esp_log.h"
 #include <stdlib.h>
 
@@ -65,6 +66,7 @@ screen_t* blackout_screen_create(void *params)
     
     // Send start_blackout command
     uart_send_command("start_blackout");
+    buzzer_beep_attack();
     
     // Draw initial screen
     draw_screen(screen);

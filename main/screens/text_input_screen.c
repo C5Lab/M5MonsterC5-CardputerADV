@@ -24,42 +24,47 @@ typedef struct {
 
 /**
  * @brief Convert key code to character
- * Returns lowercase by default, uppercase/special when shift held
+ * Returns lowercase by default, uppercase/special when shift or capslock held
+ * Based on M5Stack official keyboard layout
  */
 static char key_to_char(key_code_t key)
 {
     bool shift = keyboard_is_shift_held();
+    bool caps = keyboard_is_capslock_held();
     
-    // Letters A-Z - lowercase by default, uppercase with shift
+    // For letters: shift XOR capslock for uppercase
+    bool upper = shift ^ caps;
+    
+    // Letters A-Z - lowercase by default, uppercase with shift or capslock
     switch (key) {
-        case KEY_Q: return shift ? 'Q' : 'q';
-        case KEY_W: return shift ? 'W' : 'w';
-        case KEY_E: return shift ? 'E' : 'e';
-        case KEY_R: return shift ? 'R' : 'r';
-        case KEY_T: return shift ? 'T' : 't';
-        case KEY_Y: return shift ? 'Y' : 'y';
-        case KEY_U: return shift ? 'U' : 'u';
-        case KEY_I: return shift ? 'I' : 'i';
-        case KEY_O: return shift ? 'O' : 'o';
-        case KEY_P: return shift ? 'P' : 'p';
-        case KEY_A: return shift ? 'A' : 'a';
-        case KEY_S: return shift ? 'S' : 's';
-        case KEY_D: return shift ? 'D' : 'd';
-        case KEY_F: return shift ? 'F' : 'f';
-        case KEY_G: return shift ? 'G' : 'g';
-        case KEY_H: return shift ? 'H' : 'h';
-        case KEY_J: return shift ? 'J' : 'j';
-        case KEY_K: return shift ? 'K' : 'k';
-        case KEY_L: return shift ? 'L' : 'l';
-        case KEY_Z: return shift ? 'Z' : 'z';
-        case KEY_X: return shift ? 'X' : 'x';
-        case KEY_C: return shift ? 'C' : 'c';
-        case KEY_V: return shift ? 'V' : 'v';
-        case KEY_B: return shift ? 'B' : 'b';
-        case KEY_N: return shift ? 'N' : 'n';
-        case KEY_M: return shift ? 'M' : 'm';
+        case KEY_Q: return upper ? 'Q' : 'q';
+        case KEY_W: return upper ? 'W' : 'w';
+        case KEY_E: return upper ? 'E' : 'e';
+        case KEY_R: return upper ? 'R' : 'r';
+        case KEY_T: return upper ? 'T' : 't';
+        case KEY_Y: return upper ? 'Y' : 'y';
+        case KEY_U: return upper ? 'U' : 'u';
+        case KEY_I: return upper ? 'I' : 'i';
+        case KEY_O: return upper ? 'O' : 'o';
+        case KEY_P: return upper ? 'P' : 'p';
+        case KEY_A: return upper ? 'A' : 'a';
+        case KEY_S: return upper ? 'S' : 's';
+        case KEY_D: return upper ? 'D' : 'd';
+        case KEY_F: return upper ? 'F' : 'f';
+        case KEY_G: return upper ? 'G' : 'g';
+        case KEY_H: return upper ? 'H' : 'h';
+        case KEY_J: return upper ? 'J' : 'j';
+        case KEY_K: return upper ? 'K' : 'k';
+        case KEY_L: return upper ? 'L' : 'l';
+        case KEY_Z: return upper ? 'Z' : 'z';
+        case KEY_X: return upper ? 'X' : 'x';
+        case KEY_C: return upper ? 'C' : 'c';
+        case KEY_V: return upper ? 'V' : 'v';
+        case KEY_B: return upper ? 'B' : 'b';
+        case KEY_N: return upper ? 'N' : 'n';
+        case KEY_M: return upper ? 'M' : 'm';
         
-        // Numbers - special chars with shift
+        // Numbers - special chars with shift only (not capslock)
         case KEY_1: return shift ? '!' : '1';
         case KEY_2: return shift ? '@' : '2';
         case KEY_3: return shift ? '#' : '3';
@@ -71,7 +76,21 @@ static char key_to_char(key_code_t key)
         case KEY_9: return shift ? '(' : '9';
         case KEY_0: return shift ? ')' : '0';
         
+        // Symbol keys - special chars with shift only
+        case KEY_GRAVE:      return shift ? '~' : '`';
+        case KEY_MINUS:      return shift ? '_' : '-';
+        case KEY_EQUAL:      return shift ? '+' : '=';
+        case KEY_LBRACKET:   return shift ? '{' : '[';
+        case KEY_RBRACKET:   return shift ? '}' : ']';
+        case KEY_BACKSLASH:  return shift ? '|' : '\\';
+        case KEY_SEMICOLON:  return shift ? ':' : ';';
+        case KEY_APOSTROPHE: return shift ? '"' : '\'';
+        case KEY_COMMA:      return shift ? '<' : ',';
+        case KEY_DOT:        return shift ? '>' : '.';
+        case KEY_SLASH:      return shift ? '?' : '/';
+        
         case KEY_SPACE: return ' ';
+        case KEY_TAB:   return '\t';
         
         default: break;
     }
@@ -148,6 +167,9 @@ static void on_key(screen_t *self, key_code_t key)
 
 static void on_destroy(screen_t *self)
 {
+    // Disable text input mode when leaving
+    keyboard_set_text_input_mode(false);
+    
     if (self->user_data) {
         free(self->user_data);
     }
@@ -196,6 +218,9 @@ screen_t* text_input_screen_create(void *params)
     screen->on_key = on_key;
     screen->on_destroy = on_destroy;
     screen->on_draw = draw_screen;
+    
+    // Enable text input mode - arrows require Fn, keys produce characters
+    keyboard_set_text_input_mode(true);
     
     // Draw initial screen
     draw_screen(screen);

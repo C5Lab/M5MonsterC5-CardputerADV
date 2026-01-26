@@ -8,6 +8,7 @@ idf_component_register(
         "drivers/keyboard.c"
         "drivers/screenshot.c"
         "drivers/battery.c"
+        "drivers/buzzer.c"
         "ui/text_ui.c"
         "screens/home_screen.c"
         "screens/wifi_scan_screen.c"
@@ -51,6 +52,15 @@ idf_component_register(
         "screens/data_detail_screen.c"
         "screens/settings_screen.c"
         "screens/uart_pins_screen.c"
+        "screens/vendor_lookup_screen.c"
+        "screens/network_attacks_screen.c"
+        "screens/wifi_connect_screen.c"
+        "screens/arp_hosts_screen.c"
+        "screens/arp_attack_screen.c"
+        "screens/rogue_ap_ssid_screen.c"
+        "screens/rogue_ap_password_screen.c"
+        "screens/rogue_ap_html_screen.c"
+        "screens/rogue_ap_screen.c"
     INCLUDE_DIRS 
         "."
         "drivers"
@@ -63,6 +73,7 @@ idf_component_register(
         esp_driver_uart
         esp_driver_gpio
         esp_driver_spi
+        esp_driver_i2s
         fatfs
         vfs
         sdmmc

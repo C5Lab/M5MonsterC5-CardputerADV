@@ -51,6 +51,19 @@ esp_err_t settings_set_uart_pins(int tx_pin, int rx_pin);
  */
 bool settings_is_valid_gpio_pin(int pin);
 
+/**
+ * @brief Get Red Team mode enabled status
+ * @return true if Red Team features are enabled
+ */
+bool settings_get_red_team_enabled(void);
+
+/**
+ * @brief Set Red Team mode enabled status
+ * @param enabled true to enable Red Team features
+ * @return ESP_OK on success
+ */
+esp_err_t settings_set_red_team_enabled(bool enabled);
+
 #endif // SETTINGS_H
 
 

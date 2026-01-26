@@ -6,6 +6,7 @@
 #include "sniffer_dog_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
+#include "buzzer.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <string.h>
@@ -215,6 +216,7 @@ screen_t* sniffer_dog_screen_create(void *params)
     
     // Send start_sniffer_dog command
     uart_send_command("start_sniffer_dog");
+    buzzer_beep_attack();
     
     // Draw initial screen
     draw_screen(screen);

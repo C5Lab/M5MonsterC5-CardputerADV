@@ -8,6 +8,7 @@
 #include "sniffer_probes_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
+#include "buzzer.h"
 #include "esp_log.h"
 #include <string.h>
 #include <stdlib.h>
@@ -163,6 +164,7 @@ screen_t* global_sniffer_screen_create(void *params)
     
     // Send start_sniffer command directly (no network selection)
     uart_send_command("start_sniffer");
+    buzzer_beep_attack();
     
     // Draw initial screen
     draw_screen(screen);

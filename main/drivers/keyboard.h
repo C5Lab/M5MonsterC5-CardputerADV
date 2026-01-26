@@ -13,41 +13,45 @@
 // Key codes
 typedef enum {
     KEY_NONE = 0,
+    // Navigation keys
     KEY_UP,
     KEY_DOWN,
     KEY_LEFT,
     KEY_RIGHT,
+    // Control keys
     KEY_ENTER,
     KEY_ESC,
     KEY_SPACE,
     KEY_BACKSPACE,
     KEY_TAB,
-    KEY_Q,
+    // Letter keys
     KEY_A,
-    KEY_Z,
-    KEY_W,
-    KEY_S,
-    KEY_X,
-    KEY_E,
-    KEY_D,
-    KEY_C,
-    KEY_R,
-    KEY_F,
-    KEY_V,
-    KEY_T,
-    KEY_G,
     KEY_B,
-    KEY_Y,
+    KEY_C,
+    KEY_D,
+    KEY_E,
+    KEY_F,
+    KEY_G,
     KEY_H,
-    KEY_N,
-    KEY_U,
-    KEY_J,
-    KEY_M,
     KEY_I,
+    KEY_J,
     KEY_K,
-    KEY_O,
     KEY_L,
+    KEY_M,
+    KEY_N,
+    KEY_O,
     KEY_P,
+    KEY_Q,
+    KEY_R,
+    KEY_S,
+    KEY_T,
+    KEY_U,
+    KEY_V,
+    KEY_W,
+    KEY_X,
+    KEY_Y,
+    KEY_Z,
+    // Number keys
     KEY_0,
     KEY_1,
     KEY_2,
@@ -58,12 +62,26 @@ typedef enum {
     KEY_7,
     KEY_8,
     KEY_9,
-    KEY_FN,
-    KEY_OPT,
-    KEY_ALT,
-    KEY_DEL,
+    // Symbol keys
+    KEY_GRAVE,        // ` ~
+    KEY_MINUS,        // - _
+    KEY_EQUAL,        // = +
+    KEY_LBRACKET,     // [ {
+    KEY_RBRACKET,     // ] }
+    KEY_BACKSLASH,    // \ |
+    KEY_SEMICOLON,    // ; :
+    KEY_APOSTROPHE,   // ' "
+    KEY_COMMA,        // , <
+    KEY_DOT,          // . >
+    KEY_SLASH,        // / ?
+    // Modifier keys
     KEY_SHIFT,
     KEY_CTRL,
+    KEY_ALT,
+    KEY_OPT,
+    KEY_FN,
+    KEY_CAPSLOCK,
+    KEY_DEL,
     KEY_MAX
 } key_code_t;
 
@@ -78,6 +96,26 @@ bool keyboard_is_shift_held(void);
  * @return true if ctrl is pressed
  */
 bool keyboard_is_ctrl_held(void);
+
+/**
+ * @brief Check if capslock key is currently held
+ * @return true if capslock is pressed
+ */
+bool keyboard_is_capslock_held(void);
+
+/**
+ * @brief Check if Fn key is currently held
+ * @return true if Fn is pressed
+ */
+bool keyboard_is_fn_held(void);
+
+/**
+ * @brief Set text input mode
+ * When enabled, arrow keys (,;./) require Fn to work as arrows
+ * When disabled (default), arrow keys work without Fn (for menu navigation)
+ * @param enabled true for text input mode, false for navigation mode
+ */
+void keyboard_set_text_input_mode(bool enabled);
 
 // Key event callback type
 typedef void (*key_event_callback_t)(key_code_t key, bool pressed);
