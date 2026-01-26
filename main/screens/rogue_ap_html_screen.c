@@ -97,6 +97,31 @@ static void on_tick(screen_t *self)
     }
 }
 
+// Helper to draw a single file row
+static void draw_file_row(rogue_ap_html_data_t *data, int file_idx)
+{
+    int row_on_screen = file_idx - data->scroll_offset;
+    if (row_on_screen < 0 || row_on_screen >= VISIBLE_ITEMS) return;
+    
+    int start_row = 1;
+    
+    char label[28];
+    strncpy(label, data->html_files[file_idx], sizeof(label) - 1);
+    label[sizeof(label) - 1] = '\0';
+    char *ext = strstr(label, ".html");
+    if (ext) *ext = '\0';
+    
+    bool is_selected = (file_idx == data->selected_index);
+    ui_draw_menu_item(start_row + row_on_screen, label, is_selected, false, false);
+}
+
+// Optimized: redraw only two changed rows
+static void redraw_two_rows(rogue_ap_html_data_t *data, int old_idx, int new_idx)
+{
+    draw_file_row(data, old_idx);
+    draw_file_row(data, new_idx);
+}
+
 static void draw_screen(screen_t *self)
 {
     rogue_ap_html_data_t *data = (rogue_ap_html_data_t *)self->user_data;
@@ -183,22 +208,36 @@ static void on_key(screen_t *self, key_code_t key)
     
     switch (key) {
         case KEY_UP:
-            if (data->selected_index > 0) {
-                data->selected_index--;
-                if (data->selected_index < data->scroll_offset) {
-                    data->scroll_offset = data->selected_index;
+            if (!data->loading && data->selected_index > 0) {
+                int old_idx = data->selected_index;
+                // Check if at first visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset && data->scroll_offset > 0) {
+                    data->scroll_offset -= VISIBLE_ITEMS;
+                    if (data->scroll_offset < 0) data->scroll_offset = 0;
+                    data->selected_index = data->scroll_offset + VISIBLE_ITEMS - 1;
+                    if (data->selected_index >= data->file_count) {
+                        data->selected_index = data->file_count - 1;
+                    }
+                    draw_screen(self);  // Full redraw on page jump
+                } else {
+                    data->selected_index--;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
-                draw_screen(self);
             }
             break;
             
         case KEY_DOWN:
-            if (data->selected_index < data->file_count - 1) {
-                data->selected_index++;
-                if (data->selected_index >= data->scroll_offset + VISIBLE_ITEMS) {
-                    data->scroll_offset = data->selected_index - VISIBLE_ITEMS + 1;
+            if (!data->loading && data->selected_index < data->file_count - 1) {
+                int old_idx = data->selected_index;
+                // Check if at last visible item on page - do page jump
+                if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
+                    data->scroll_offset += VISIBLE_ITEMS;
+                    data->selected_index = data->scroll_offset;
+                    draw_screen(self);  // Full redraw on page jump
+                } else {
+                    data->selected_index++;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
-                draw_screen(self);
             }
             break;
             
@@ -266,7 +305,8 @@ screen_t* rogue_ap_html_screen_create(void *params)
     uart_register_line_callback(uart_line_callback, data);
     uart_send_command("list_sd");
     
-    draw_screen(screen);
+    // Request initial screen draw via on_tick (avoids double draw)
+    data->needs_redraw = true;
     
     ESP_LOGI(TAG, "Rogue AP HTML screen created");
     return screen;

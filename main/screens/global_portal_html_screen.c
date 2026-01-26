@@ -105,6 +105,31 @@ static void on_tick(screen_t *self)
     }
 }
 
+// Helper to draw a single file row
+static void draw_file_row(global_portal_html_data_t *data, int file_idx)
+{
+    int row_on_screen = file_idx - data->scroll_offset;
+    if (row_on_screen < 0 || row_on_screen >= VISIBLE_ITEMS) return;
+    
+    int start_row = 1;
+    
+    char label[28];
+    strncpy(label, data->html_files[file_idx], sizeof(label) - 1);
+    label[sizeof(label) - 1] = '\0';
+    char *ext = strstr(label, ".html");
+    if (ext) *ext = '\0';
+    
+    bool is_selected = (file_idx == data->selected_index);
+    ui_draw_menu_item(start_row + row_on_screen, label, is_selected, false, false);
+}
+
+// Optimized: redraw only two changed rows
+static void redraw_two_rows(global_portal_html_data_t *data, int old_idx, int new_idx)
+{
+    draw_file_row(data, old_idx);
+    draw_file_row(data, new_idx);
+}
+
 static void draw_screen(screen_t *self)
 {
     global_portal_html_data_t *data = (global_portal_html_data_t *)self->user_data;
@@ -152,8 +177,8 @@ static void draw_screen(screen_t *self)
         }
     }
     
-    // Fill gap to status bar
-    int gap_y = 6 * 16;
+    // Fill gap to status bar (after all visible items: start_row + VISIBLE_ITEMS)
+    int gap_y = (1 + VISIBLE_ITEMS) * 16;
     int status_y = DISPLAY_HEIGHT - 16 - 2;
     if (gap_y < status_y) {
         display_fill_rect(0, gap_y, DISPLAY_WIDTH, status_y - gap_y, UI_COLOR_BG);
@@ -216,20 +241,7 @@ static void on_key(screen_t *self, key_code_t key)
                     draw_screen(self);  // Full redraw on page jump
                 } else {
                     data->selected_index--;
-                    // Redraw only 2 rows
-                    int start_row = 1;
-                    for (int idx = old_idx; idx >= data->selected_index; idx--) {
-                        int i = idx - data->scroll_offset;
-                        if (i >= 0 && i < VISIBLE_ITEMS && idx < data->file_count) {
-                            char label[28];
-                            strncpy(label, data->html_files[idx], sizeof(label) - 1);
-                            label[sizeof(label) - 1] = '\0';
-                            char *ext = strstr(label, ".html");
-                            if (ext) *ext = '\0';
-                            bool selected = (idx == data->selected_index);
-                            ui_draw_menu_item(start_row + i, label, selected, false, false);
-                        }
-                    }
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
             }
             break;
@@ -245,20 +257,7 @@ static void on_key(screen_t *self, key_code_t key)
                     draw_screen(self);  // Full redraw on page jump
                 } else {
                     data->selected_index++;
-                    // Redraw only 2 rows
-                    int start_row = 1;
-                    for (int idx = old_idx; idx <= data->selected_index; idx++) {
-                        int i = idx - data->scroll_offset;
-                        if (i >= 0 && i < VISIBLE_ITEMS && idx < data->file_count) {
-                            char label[28];
-                            strncpy(label, data->html_files[idx], sizeof(label) - 1);
-                            label[sizeof(label) - 1] = '\0';
-                            char *ext = strstr(label, ".html");
-                            if (ext) *ext = '\0';
-                            bool selected = (idx == data->selected_index);
-                            ui_draw_menu_item(start_row + i, label, selected, false, false);
-                        }
-                    }
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
             }
             break;
@@ -333,8 +332,8 @@ screen_t* global_portal_html_screen_create(void *params)
     // Send list_sd command
     uart_send_command("list_sd");
     
-    // Draw initial screen (loading state)
-    draw_screen(screen);
+    // Request initial screen draw via on_tick (avoids double draw)
+    data->needs_redraw = true;
     
     ESP_LOGI(TAG, "Global portal HTML screen created");
     return screen;
