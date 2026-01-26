@@ -316,3 +316,57 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  discord:
+    name: Discord
+    needs: [release, firmware, pages]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Notify Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.GIT_BUILD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', needs.firmware.outputs.fw_version) }}
+          REPO: ${{ github.repository }}
+          PAGES_URL: ${{ needs.pages.outputs.page_url || format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}
+        run: |
+          set -e
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK not configured, skipping notification"
+            exit 0
+          fi
+          TAG="${RELEASE_TAG:-$FW_VERSION}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          FW_BIN="$BASE_URL/M5MonsterC5-CardputerADV-${FW_VERSION}.bin"
+          LAUNCHER_BIN="$BASE_URL/M5MonsterC5-CardputerADV-launcher-${FW_VERSION}.bin"
+          FULL_BIN="$BASE_URL/M5MonsterC5-CardputerADV-full-${FW_VERSION}.bin"
+          ZIP_BUNDLE="$BASE_URL/M5MonsterC5-CardputerADV-${FW_VERSION}.zip"
+          RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
+          PAGES_LINK="${PAGES_URL:-https://${GITHUB_REPOSITORY%/*}.github.io/${GITHUB_REPOSITORY#*/}/}"
+          RELEASE_BODY=$(gh release view "$TAG" -R "$REPO" --json body --jq .body 2>/dev/null || true)
+          if [ -n "$RELEASE_BODY" ]; then
+            RELEASE_BODY="$(printf '%s' "$RELEASE_BODY" | tr -d '\r' | head -c 1800)"
+          fi
+
+          content=$(
+            printf '%s\n' \
+              "M5MonsterC5-CardputerADV" \
+              "Release ${TAG} published." \
+              "Release page:" \
+              "${RELEASE_PAGE}" \
+              "Web flasher:" \
+              "${PAGES_LINK}" \
+              "JANOS_ADV_VERSION (${FW_VERSION}):" \
+              "${FW_BIN}" \
+              "Launcher:" \
+              "${LAUNCHER_BIN}" \
+              "Full flash image:" \
+              "${FULL_BIN}" \
+              "ZIP package:" \
+              "${ZIP_BUNDLE}" \
+              "${RELEASE_BODY}"
+          )
+          payload=$(jq -n --arg content "$content" '{content:$content}')
+          curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
