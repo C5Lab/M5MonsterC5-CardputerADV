@@ -355,6 +355,7 @@ jobs:
   discord:
     name: Discord
     needs: [release, package, pages]
+    if: false
     runs-on: ubuntu-24.04
     steps:
       - name: Notify Discord
