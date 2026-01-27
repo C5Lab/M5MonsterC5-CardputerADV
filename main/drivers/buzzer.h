@@ -1,6 +1,6 @@
 /**
  * @file buzzer.h
- * @brief Audio driver for M5Stack Cardputer ADV (ES8311 codec + NS4150B amp)
+ * @brief Audio driver for M5Stack Cardputer (ADV/K132)
  */
 
 #ifndef BUZZER_H
@@ -9,17 +9,17 @@
 #include "esp_err.h"
 #include <stdint.h>
 
-// M5Stack Cardputer ADV I2S pins (from M5Unified)
+// Cardputer I2S pins (ADV and K132 share these)
 // https://github.com/m5stack/M5Unified/blob/master/src/M5Unified.cpp
 #define I2S_BCLK_PIN    41
 #define I2S_LRCK_PIN    43
 #define I2S_DOUT_PIN    42
 
 // ES8311 uses same I2C bus as keyboard (I2C_NUM_0, SDA=8, SCL=9)
-// ES8311 I2C address
+// ES8311 I2C address (ADV only)
 #define ES8311_I2C_ADDR 0x18
 
-// Speaker amplifier enable pin (active high)
+// Speaker amplifier enable pin (active high, ADV only)
 #define SPEAKER_EN_PIN  46
 
 /**

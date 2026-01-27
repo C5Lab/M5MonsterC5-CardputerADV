@@ -7,6 +7,9 @@ endif()
 if(NOT DEFINED APP)
   message(FATAL_ERROR "post_build.cmake: APP is not set")
 endif()
+if(NOT DEFINED BOARD)
+  set(BOARD "unknown")
+endif()
 
 file(MAKE_DIRECTORY "${DEST}")
 
@@ -29,10 +32,27 @@ foreach(F ${SRCS})
   endif()
 endforeach()
 
+if(DEFINED BOARD)
+  # Copy board-specific aliases into the output folder
+  if(EXISTS "${DEST}/bootloader.bin")
+    file(COPY_FILE "${DEST}/bootloader.bin" "${DEST}/bootloader-${BOARD}.bin")
+  endif()
+  if(EXISTS "${DEST}/partition-table.bin")
+    file(COPY_FILE "${DEST}/partition-table.bin" "${DEST}/partition-table-${BOARD}.bin")
+  endif()
+  if(EXISTS "${DEST}/${APP}")
+    file(COPY_FILE "${DEST}/${APP}" "${DEST}/M5MonsterC5-CardputerADV-${BOARD}.bin")
+  endif()
+endif()
+
+if(DEFINED SRC AND EXISTS "${SRC}/binaries-esp32s3/flash_board.py")
+  file(COPY "${SRC}/binaries-esp32s3/flash_board.py" DESTINATION "${DEST}")
+endif()
+
 set(BOOTLOADER "${BLD}/bootloader/bootloader.bin")
 set(PART_TABLE "${BLD}/partition_table/partition-table.bin")
 set(APP_BIN "${BLD}/${APP}")
-set(FULL_OUT "${DEST}/M5MonsterC5-CardputerADV-full.bin")
+set(FULL_OUT "${DEST}/M5MonsterC5-CardputerADV-${BOARD}-full.bin")
 
 if(EXISTS "${BOOTLOADER}" AND EXISTS "${PART_TABLE}" AND EXISTS "${APP_BIN}")
   find_program(PYTHON_EXE NAMES python3 python)

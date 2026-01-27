@@ -1,0 +1,311 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build ADV",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["-B", "build-adv", "-DBOARD=adv", "build"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv build"
+        ]
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
+        ]
+      },
+      "osx": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
+        ]
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build K132",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["-B", "build-k132", "-DBOARD=k132", "build"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 build"
+        ]
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
+        ]
+      },
+      "osx": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
+        ]
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Flash ADV",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["-B", "build-adv", "-DBOARD=adv", "flash"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv flash"
+        ]
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv flash"
+        ]
+      },
+      "osx": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv flash"
+        ]
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Flash K132",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["-B", "build-k132", "-DBOARD=k132", "flash"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 flash"
+        ]
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 flash"
+        ]
+      },
+      "osx": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 flash"
+        ]
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean ADV",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["-B", "build-adv", "-DBOARD=adv", "fullclean"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv fullclean"
+        ]
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
+        ]
+      },
+      "osx": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
+        ]
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean+Build+Flash ADV",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Clean ADV", "Build ADV", "Flash ADV"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean K132",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["-B", "build-k132", "-DBOARD=k132", "fullclean"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 fullclean"
+        ]
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
+        ]
+      },
+      "osx": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
+        ]
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean+Build+Flash K132",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Clean K132", "Build K132", "Flash K132"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Monitor ADV",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["-B", "build-adv", "-DBOARD=adv", "monitor"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv monitor"
+        ]
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv monitor"
+        ]
+      },
+      "osx": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv monitor"
+        ]
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Monitor K132",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["-B", "build-k132", "-DBOARD=k132", "monitor"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 monitor"
+        ]
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 monitor"
+        ]
+      },
+      "osx": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 monitor"
+        ]
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean+Build+Flash+Monitor ADV",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Clean ADV", "Build ADV", "Flash ADV", "Monitor ADV"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean+Build+Flash+Monitor K132",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Clean K132", "Build K132", "Flash K132", "Monitor K132"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build BOTH (ADV + K132)",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Build ADV", "Build K132"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean BOTH (ADV + K132)",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Clean ADV", "Clean K132"],
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}
