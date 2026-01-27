@@ -97,6 +97,13 @@ bool uart_is_wifi_connected(void);
  */
 void uart_set_wifi_connected(bool connected);
 
+/**
+ * @brief Check if board is connected by sending ping and waiting for pong
+ * @param timeout_ms Timeout in milliseconds to wait for response
+ * @return true if pong received within timeout, false otherwise
+ */
+bool uart_check_board_ping(int timeout_ms);
+
 #endif // UART_HANDLER_H
 
 

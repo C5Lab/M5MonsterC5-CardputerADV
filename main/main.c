@@ -19,8 +19,9 @@
 #include "battery.h"
 #include "settings.h"
 #include "buzzer.h"
+#include "text_ui.h"
 
-#define JANOS_ADV_VERSION "1.3.5"
+#define JANOS_ADV_VERSION "1.4.0"
 
 // Screen timeout configuration
 #define SCREEN_TIMEOUT_MS  30000  // 30 seconds
@@ -86,6 +87,50 @@ void app_main(void)
         return;
     }
     ESP_LOGI(TAG, "UART handler initialized successfully");
+
+    // Board detection - check if ESP32C5 board is connected
+    ESP_LOGI(TAG, "Checking for ESP32C5 board...");
+    bool board_detected = uart_check_board_ping(500);
+    bool popup_dismissed = false;
+
+    if (!board_detected) {
+        ESP_LOGW(TAG, "Board not detected, showing popup...");
+        
+        // Show popup
+        ui_clear();
+        ui_show_message("Warning", "Board not detected");
+        display_flush();
+        
+        // Retry loop - ping every 1s until board detected or ESC pressed
+        while (!board_detected && !popup_dismissed) {
+            // Check for ESC key to dismiss popup
+            // Poll keyboard for ~1 second in small intervals
+            for (int i = 0; i < 100 && !popup_dismissed; i++) {
+                keyboard_process();
+                key_code_t key = keyboard_get_key();
+                if (key == KEY_ESC) {
+                    popup_dismissed = true;
+                    ESP_LOGI(TAG, "Board detection popup dismissed by user");
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+            
+            // If not dismissed, try ping again
+            if (!popup_dismissed) {
+                board_detected = uart_check_board_ping(500);
+            }
+        }
+        
+        // Clear popup
+        ui_clear();
+    }
+    
+    if (board_detected) {
+        ESP_LOGI(TAG, "ESP32C5 board detected");
+    } else {
+        ESP_LOGW(TAG, "Continuing without board detection");
+    }
 
     // Initialize buzzer
     ESP_LOGI(TAG, "Initializing buzzer...");
