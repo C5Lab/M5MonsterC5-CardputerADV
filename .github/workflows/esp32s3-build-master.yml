@@ -198,6 +198,13 @@ jobs:
           name: esp32s3-firmware
           path: release_artifacts/firmware
 
+      - name: Ensure flash_board.py is present
+        run: |
+          set -e
+          if [ ! -f release_artifacts/firmware/flash_board.py ]; then
+            cp binaries-esp32s3/flash_board.py release_artifacts/firmware/flash_board.py
+          fi
+
       - name: Package full bundle (JANOS)
         run: |
           set -e
@@ -218,7 +225,6 @@ jobs:
               "firmware/${board}/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.bin"
               "firmware/${board}/M5MonsterC5-CardputerADV-${board}-launcher-${FW_VERSION}.bin"
               "firmware/${board}/M5MonsterC5-CardputerADV-${board}-launcher.bin"
-              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.zip"
             )
             out="bundle/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.zip"
             rm -f "$out"
@@ -241,7 +247,6 @@ jobs:
             release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.bin
             release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-launcher.bin
             release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-launcher-${{ needs.package.outputs.fw_version }}.bin
-            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.zip
             release_artifacts/firmware/k132/bootloader-k132.bin
             release_artifacts/firmware/k132/partition-table-k132.bin
             release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-full.bin
@@ -250,7 +255,6 @@ jobs:
             release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.bin
             release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-launcher.bin
             release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-launcher-${{ needs.package.outputs.fw_version }}.bin
-            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.zip
             release_artifacts/bundle/M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.zip
             release_artifacts/bundle/M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.zip
         env:
