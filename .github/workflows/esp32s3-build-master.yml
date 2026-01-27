@@ -230,7 +230,7 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ format('M5MonsterC5-CardputerADV {0}', needs.package.outputs.fw_version) }}
-          overwrite: true
+          overwrite_files: true
           files: |
             release_artifacts/firmware/flash_board.py
             release_artifacts/firmware/adv/bootloader-adv.bin
