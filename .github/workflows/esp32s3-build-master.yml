@@ -106,6 +106,7 @@ jobs:
           print(m.group(1))
           PY
           )
+          cp "binaries-esp32s3/flash_board.py" "release_artifacts/firmware/flash_board.py"
           for board in adv k132; do
             src_dir="release_artifacts/firmware/${board}"
             src="${src_dir}/M5MonsterC5-CardputerADV.bin"
@@ -197,13 +198,6 @@ jobs:
         with:
           name: esp32s3-firmware
           path: release_artifacts/firmware
-
-      - name: Ensure flash_board.py is present
-        run: |
-          set -e
-          if [ ! -f release_artifacts/firmware/flash_board.py ]; then
-            cp binaries-esp32s3/flash_board.py release_artifacts/firmware/flash_board.py
-          fi
 
       - name: Package full bundle (JANOS)
         run: |
