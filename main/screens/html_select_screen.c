@@ -145,8 +145,8 @@ static void draw_screen(screen_t *self)
         }
     }
     
-    // Fill gap to status bar
-    int gap_y = 6 * 16;
+    // Fill gap to status bar (after all visible items: start_row + VISIBLE_ITEMS)
+    int gap_y = (1 + VISIBLE_ITEMS) * 16;
     int status_y = DISPLAY_HEIGHT - 16 - 2;
     if (gap_y < status_y) {
         display_fill_rect(0, gap_y, DISPLAY_WIDTH, status_y - gap_y, UI_COLOR_BG);
