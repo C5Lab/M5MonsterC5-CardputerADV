@@ -32,15 +32,17 @@ on:
     types: [published, edited]
 
 jobs:
-  firmware:
-    name: JANOS_ADV
+  build:
+    name: Build ${{ matrix.board }}
     permissions:
-      contents: write
+      contents: read
     runs-on: ubuntu-24.04
     container:
       image: espressif/idf:v6.0-beta1
-    outputs:
-      fw_version: ${{ steps.version.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [adv, k132]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,7 +57,40 @@ jobs:
             espidf-6.0-
 
       - name: Build JanOS (IDF 6.0)
+        env:
+          BOARD_LIST: ${{ matrix.board }}
         run: IDF_PY_FLAGS="--preview" bash .github/scripts/container_build.sh --no-docker
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-firmware-${{ matrix.board }}
+          path: binaries-esp32s3/${{ matrix.board }}
+          if-no-files-found: error
+
+  package:
+    name: Package Release Artifacts
+    needs: [build]
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    outputs:
+      fw_version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download ADV artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32s3-firmware-adv
+          path: release_artifacts/firmware/adv
+
+      - name: Download K132 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32s3-firmware-k132
+          path: release_artifacts/firmware/k132
 
       - name: Stamp JanOS with JANOS_ADV_VERSION
         id: version
@@ -71,17 +106,22 @@ jobs:
           print(m.group(1))
           PY
           )
-          src="binaries-esp32s3/M5MonsterC5-CardputerADV.bin"
-          dst="binaries-esp32s3/M5MonsterC5-CardputerADV-${version}.bin"
-          if [ ! -f "$src" ]; then
-            echo "Missing firmware: $src" >&2
-            exit 1
-          fi
-          cp "$src" "$dst"
-          cp "$src" "binaries-esp32s3/M5MonsterC5-CardputerADV-launcher.bin"
-          cp "$src" "binaries-esp32s3/M5MonsterC5-CardputerADV-launcher-${version}.bin"
+          for board in adv k132; do
+            src_dir="release_artifacts/firmware/${board}"
+            src="${src_dir}/M5MonsterC5-CardputerADV.bin"
+            if [ ! -f "$src" ]; then
+              echo "Missing firmware: $src" >&2
+              exit 1
+            fi
+            cp "binaries-esp32s3/flash_board.py" "${src_dir}/flash_board.py"
+            cp "${src_dir}/bootloader.bin" "${src_dir}/bootloader-${board}.bin"
+            cp "${src_dir}/partition-table.bin" "${src_dir}/partition-table-${board}.bin"
+            cp "$src" "${src_dir}/M5MonsterC5-CardputerADV-${board}.bin"
+            cp "$src" "${src_dir}/M5MonsterC5-CardputerADV-${board}-${version}.bin"
+            cp "$src" "${src_dir}/M5MonsterC5-CardputerADV-${board}-launcher.bin"
+            cp "$src" "${src_dir}/M5MonsterC5-CardputerADV-${board}-launcher-${version}.bin"
+          done
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "release_asset=${dst}" >> "$GITHUB_OUTPUT"
 
       - name: Merge full flash image
         shell: bash
@@ -93,43 +133,48 @@ jobs:
           fi
           python3 -m venv /tmp/esptool-venv
           /tmp/esptool-venv/bin/python -m pip install --no-cache-dir esptool
-          /tmp/esptool-venv/bin/python -m esptool --chip esp32s3 merge_bin -o "binaries-esp32s3/M5MonsterC5-CardputerADV-full-${{ steps.version.outputs.version }}.bin" \
-            --flash_mode dio --flash_freq 80m --flash_size 4MB \
-            0x0 "binaries-esp32s3/bootloader.bin" \
-            0x8000 "binaries-esp32s3/partition-table.bin" \
-            0x10000 "binaries-esp32s3/M5MonsterC5-CardputerADV.bin"
-          cp "binaries-esp32s3/M5MonsterC5-CardputerADV-full-${{ steps.version.outputs.version }}.bin" \
-            "binaries-esp32s3/M5MonsterC5-CardputerADV-full.bin"
+          for board in adv k132; do
+            out_dir="release_artifacts/firmware/${board}"
+            /tmp/esptool-venv/bin/python -m esptool --chip esp32s3 merge_bin -o "${out_dir}/M5MonsterC5-CardputerADV-${board}-full-${{ steps.version.outputs.version }}.bin" \
+              --flash_mode dio --flash_freq 80m --flash_size 4MB \
+              0x0 "${out_dir}/bootloader.bin" \
+              0x8000 "${out_dir}/partition-table.bin" \
+              0x10000 "${out_dir}/M5MonsterC5-CardputerADV.bin"
+            cp "${out_dir}/M5MonsterC5-CardputerADV-${board}-full-${{ steps.version.outputs.version }}.bin" \
+              "${out_dir}/M5MonsterC5-CardputerADV-${board}-full.bin"
+          done
 
-      - name: Package JANOS_ADV zip
+      - name: Package JanOS bundles
         id: bundle
         run: |
           set -e
-          cd binaries-esp32s3
-          out="M5MonsterC5-CardputerADV-${{ steps.version.outputs.version }}.zip"
-          rm -f "$out"
-          zip -9 "$out" \
-            bootloader.bin \
-            partition-table.bin \
-            flash_board.py \
-            M5MonsterC5-CardputerADV-full.bin \
-            "M5MonsterC5-CardputerADV-full-${{ steps.version.outputs.version }}.bin" \
-            "M5MonsterC5-CardputerADV-${{ steps.version.outputs.version }}.bin" \
-            "M5MonsterC5-CardputerADV-launcher-${{ steps.version.outputs.version }}.bin" \
-            M5MonsterC5-CardputerADV-launcher.bin \
-            M5MonsterC5-CardputerADV.bin
-          echo "bundle_zip=$(pwd)/$out" >> "$GITHUB_OUTPUT"
+          for board in adv k132; do
+            cd "release_artifacts/firmware/${board}"
+            out="M5MonsterC5-CardputerADV-${board}-${{ steps.version.outputs.version }}.zip"
+            rm -f "$out"
+            zip -9 "$out" \
+              "bootloader-${board}.bin" \
+              "partition-table-${board}.bin" \
+              flash_board.py \
+              "M5MonsterC5-CardputerADV-${board}-full.bin" \
+              "M5MonsterC5-CardputerADV-${board}-full-${{ steps.version.outputs.version }}.bin" \
+              "M5MonsterC5-CardputerADV-${board}.bin" \
+              "M5MonsterC5-CardputerADV-${board}-${{ steps.version.outputs.version }}.bin" \
+              "M5MonsterC5-CardputerADV-${board}-launcher.bin" \
+              "M5MonsterC5-CardputerADV-${board}-launcher-${{ steps.version.outputs.version }}.bin"
+            cd - >/dev/null
+          done
 
       - name: Upload JanOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: esp32s3-firmware
-          path: binaries-esp32s3
+          path: release_artifacts/firmware
           if-no-files-found: error
 
   release:
     name: Release
-    needs: [firmware]
+    needs: [package]
     runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     steps:
@@ -138,7 +183,7 @@ jobs:
         env:
           EVENT_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.release_tag }}
-          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
+          FW_VERSION: ${{ needs.package.outputs.fw_version }}
         run: |
           set -euo pipefail
           TAG="${EVENT_TAG:-}"
@@ -147,41 +192,38 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Using tag: $TAG"
 
-      - name: Download JanOS_ADV artifacts
+      - name: Download JanOS artifacts
         uses: actions/download-artifact@v4
         with:
           name: esp32s3-firmware
           path: release_artifacts/firmware
 
-      - name: Package full bundle (JANOS_ADV)
+      - name: Package full bundle (JANOS)
         run: |
           set -e
           cd release_artifacts
           mkdir -p bundle
-          FW_VERSION="${{ needs.firmware.outputs.fw_version }}"
+          FW_VERSION="${{ needs.package.outputs.fw_version }}"
 
           shopt -s nullglob
 
-          files=(
-            firmware/bootloader.bin
-            firmware/partition-table.bin
-            firmware/flash_board.py
-            firmware/M5MonsterC5-CardputerADV-full.bin
-            "firmware/M5MonsterC5-CardputerADV-full-${FW_VERSION}.bin"
-            firmware/M5MonsterC5-CardputerADV.bin
-            "firmware/M5MonsterC5-CardputerADV-${FW_VERSION}.bin"
-            "firmware/M5MonsterC5-CardputerADV-launcher-${FW_VERSION}.bin"
-            firmware/M5MonsterC5-CardputerADV-launcher.bin
-          )
-
-          # Include existing JanOS_ADV zip if present
-          if [ -f "firmware/M5MonsterC5-CardputerADV-${FW_VERSION}.zip" ]; then
-            files+=("firmware/M5MonsterC5-CardputerADV-${FW_VERSION}.zip")
-          fi
-
-          out="bundle/M5MonsterC5-CardputerADV-${FW_VERSION}.zip"
-          rm -f "$out"
-          zip -9 "$out" "${files[@]}"
+          for board in adv k132; do
+            files=(
+              "firmware/${board}/bootloader-${board}.bin"
+              "firmware/${board}/partition-table-${board}.bin"
+              "firmware/flash_board.py"
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-full.bin"
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-full-${FW_VERSION}.bin"
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}.bin"
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.bin"
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-launcher-${FW_VERSION}.bin"
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-launcher.bin"
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.zip"
+            )
+            out="bundle/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.zip"
+            rm -f "$out"
+            zip -9 "$out" "${files[@]}"
+          done
 
       - name: Delete existing assets (rebuild)
         if: github.event_name == 'workflow_dispatch' && inputs.rebuild_release == 'true'
@@ -191,16 +233,27 @@ jobs:
         run: |
           set -euo pipefail
           assets=(
-            "bootloader.bin"
-            "partition-table.bin"
             "flash_board.py"
-            "M5MonsterC5-CardputerADV-full.bin"
-            "M5MonsterC5-CardputerADV-full-${{ needs.firmware.outputs.fw_version }}.bin"
-            "M5MonsterC5-CardputerADV.bin"
-            "M5MonsterC5-CardputerADV-${{ needs.firmware.outputs.fw_version }}.bin"
-            "M5MonsterC5-CardputerADV-launcher.bin"
-            "M5MonsterC5-CardputerADV-launcher-${{ needs.firmware.outputs.fw_version }}.bin"
-            "M5MonsterC5-CardputerADV-${{ needs.firmware.outputs.fw_version }}.zip"
+            "adv/flash_board.py"
+            "bootloader-adv.bin"
+            "partition-table-adv.bin"
+            "M5MonsterC5-CardputerADV-adv-full.bin"
+            "M5MonsterC5-CardputerADV-adv-full-${{ needs.package.outputs.fw_version }}.bin"
+            "M5MonsterC5-CardputerADV-adv.bin"
+            "M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.bin"
+            "M5MonsterC5-CardputerADV-adv-launcher.bin"
+            "M5MonsterC5-CardputerADV-adv-launcher-${{ needs.package.outputs.fw_version }}.bin"
+            "M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.zip"
+            "k132/flash_board.py"
+            "bootloader-k132.bin"
+            "partition-table-k132.bin"
+            "M5MonsterC5-CardputerADV-k132-full.bin"
+            "M5MonsterC5-CardputerADV-k132-full-${{ needs.package.outputs.fw_version }}.bin"
+            "M5MonsterC5-CardputerADV-k132.bin"
+            "M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.bin"
+            "M5MonsterC5-CardputerADV-k132-launcher.bin"
+            "M5MonsterC5-CardputerADV-k132-launcher-${{ needs.package.outputs.fw_version }}.bin"
+            "M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.zip"
           )
           for name in "${assets[@]}"; do
             if gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq ".assets[].name" | grep -qx "$name"; then
@@ -212,24 +265,37 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: ${{ format('M5MonsterC5-CardputerADV {0}', needs.firmware.outputs.fw_version) }}
+          name: ${{ format('M5MonsterC5-CardputerADV {0}', needs.package.outputs.fw_version) }}
           files: |
-            release_artifacts/firmware/bootloader.bin
-            release_artifacts/firmware/partition-table.bin
             release_artifacts/firmware/flash_board.py
-            release_artifacts/firmware/M5MonsterC5-CardputerADV-full.bin
-            release_artifacts/firmware/M5MonsterC5-CardputerADV-full-${{ needs.firmware.outputs.fw_version }}.bin
-            release_artifacts/firmware/M5MonsterC5-CardputerADV.bin
-            release_artifacts/firmware/M5MonsterC5-CardputerADV-${{ needs.firmware.outputs.fw_version }}.bin
-            release_artifacts/firmware/M5MonsterC5-CardputerADV-launcher.bin
-            release_artifacts/firmware/M5MonsterC5-CardputerADV-launcher-${{ needs.firmware.outputs.fw_version }}.bin
-            release_artifacts/firmware/M5MonsterC5-CardputerADV-${{ needs.firmware.outputs.fw_version }}.zip
+            release_artifacts/firmware/adv/flash_board.py
+            release_artifacts/firmware/adv/bootloader-adv.bin
+            release_artifacts/firmware/adv/partition-table-adv.bin
+            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-full.bin
+            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-full-${{ needs.package.outputs.fw_version }}.bin
+            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv.bin
+            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.bin
+            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-launcher.bin
+            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-launcher-${{ needs.package.outputs.fw_version }}.bin
+            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.zip
+            release_artifacts/firmware/k132/flash_board.py
+            release_artifacts/firmware/k132/bootloader-k132.bin
+            release_artifacts/firmware/k132/partition-table-k132.bin
+            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-full.bin
+            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-full-${{ needs.package.outputs.fw_version }}.bin
+            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132.bin
+            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.bin
+            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-launcher.bin
+            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-launcher-${{ needs.package.outputs.fw_version }}.bin
+            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.zip
+            release_artifacts/bundle/M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.zip
+            release_artifacts/bundle/M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   pages:
     name: Pages Web Flasher
-    needs: [release, firmware]
+    needs: [release, package]
     if: ${{ needs.release.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.build_pages == 'true') }}
     runs-on: ubuntu-24.04
     permissions:
@@ -255,7 +321,7 @@ jobs:
         env:
           EVENT_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.release_tag }}
-          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
+          FW_VERSION: ${{ needs.package.outputs.fw_version }}
         run: |
           set -euo pipefail
           TAG="${EVENT_TAG:-}"
@@ -272,30 +338,38 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.meta.outputs.tag }}"
           rm -rf docs/firmware
-          mkdir -p docs/firmware
+          mkdir -p docs/firmware/tmp
 
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir docs/firmware \
-            --pattern "bootloader.bin" \
-            --pattern "partition-table.bin" \
-            --pattern "M5MonsterC5-CardputerADV*.bin"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir docs/firmware/tmp \
+            --pattern "bootloader-adv.bin" \
+            --pattern "partition-table-adv.bin" \
+            --pattern "M5MonsterC5-CardputerADV-adv*.bin" \
+            --pattern "bootloader-k132.bin" \
+            --pattern "partition-table-k132.bin" \
+            --pattern "M5MonsterC5-CardputerADV-k132*.bin"
 
-          ls -lh docs/firmware
+          mkdir -p docs/firmware/adv docs/firmware/k132
 
-          if [ ! -f docs/firmware/M5MonsterC5-CardputerADV.bin ]; then
-            alt=$(ls docs/firmware/M5MonsterC5-CardputerADV-*.bin 2>/dev/null | head -n1 || true)
-            if [ -n "$alt" ]; then
-              cp "$alt" docs/firmware/M5MonsterC5-CardputerADV.bin
-            fi
-          fi
+          cp docs/firmware/tmp/bootloader-adv.bin docs/firmware/adv/bootloader.bin
+          cp docs/firmware/tmp/partition-table-adv.bin docs/firmware/adv/partition-table.bin
+          cp docs/firmware/tmp/M5MonsterC5-CardputerADV-adv.bin docs/firmware/adv/M5MonsterC5-CardputerADV.bin
 
-          for f in bootloader.bin partition-table.bin M5MonsterC5-CardputerADV.bin; do
-            if [ ! -f "docs/firmware/$f" ]; then
-              echo "Missing $f in release assets for tag ${TAG}" >&2
-              exit 1
-            fi
+          cp docs/firmware/tmp/bootloader-k132.bin docs/firmware/k132/bootloader.bin
+          cp docs/firmware/tmp/partition-table-k132.bin docs/firmware/k132/partition-table.bin
+          cp docs/firmware/tmp/M5MonsterC5-CardputerADV-k132.bin docs/firmware/k132/M5MonsterC5-CardputerADV.bin
+
+          ls -lh docs/firmware/adv docs/firmware/k132
+
+          for board in adv k132; do
+            for f in bootloader.bin partition-table.bin M5MonsterC5-CardputerADV.bin; do
+              if [ ! -f "docs/firmware/${board}/$f" ]; then
+                echo "Missing $f for ${board} in release assets for tag ${TAG}" >&2
+                exit 1
+              fi
+            done
           done
 
-          fw_version=$(ls docs/firmware/M5MonsterC5-CardputerADV-*.bin 2>/dev/null | head -n1 | xargs -n1 basename | sed -E 's/^M5MonsterC5-CardputerADV-([^.]*)\\.bin$/\\1/')
+          fw_version=$(ls docs/firmware/tmp/M5MonsterC5-CardputerADV-adv-*.bin 2>/dev/null | head -n1 | xargs -n1 basename | sed -E 's/^M5MonsterC5-CardputerADV-adv-([^.]*)\\.bin$/\\1/')
           if [ -z "$fw_version" ]; then
             fw_version="${TAG}"
           fi
@@ -307,7 +381,7 @@ jobs:
           BUILD_TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
-          python -c "import os, json; from pathlib import Path; version=os.getenv('FW_VERSION') or os.getenv('BUILD_TAG'); build=os.getenv('BUILD_TAG','manual'); manifest={'name':'M5MonsterC5-CardputerADV ESP32-S3','version':version,'build':build,'chipFamily':'ESP32-S3','parts':[{'path':'firmware/bootloader.bin','offset':8192},{'path':'firmware/partition-table.bin','offset':32768},{'path':'firmware/M5MonsterC5-CardputerADV.bin','offset':65536}]}; Path('docs/manifest.json').write_text(json.dumps(manifest, indent=2))"
+          python -c "import os, json; from pathlib import Path; version=os.getenv('FW_VERSION') or os.getenv('BUILD_TAG'); build=os.getenv('BUILD_TAG','manual'); base={'version':version,'build':build,'chipFamily':'ESP32-S3'}; adv={'name':'M5MonsterC5-CardputerADV ESP32-S3 (ADV)','parts':[{'path':'firmware/adv/bootloader.bin','offset':8192},{'path':'firmware/adv/partition-table.bin','offset':32768},{'path':'firmware/adv/M5MonsterC5-CardputerADV.bin','offset':65536}]}; k132={'name':'M5MonsterC5-CardputerADV ESP32-S3 (K132)','parts':[{'path':'firmware/k132/bootloader.bin','offset':8192},{'path':'firmware/k132/partition-table.bin','offset':32768},{'path':'firmware/k132/M5MonsterC5-CardputerADV.bin','offset':65536}]}; Path('docs/manifest.json').write_text(json.dumps({**base, **adv}, indent=2)); Path('docs/manifest_k132.json').write_text(json.dumps({**base, **k132}, indent=2))"
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -319,7 +393,7 @@ jobs:
 
   discord:
     name: Discord
-    needs: [release, firmware, pages]
+    needs: [release, package, pages]
     runs-on: ubuntu-24.04
     steps:
       - name: Notify Discord
@@ -327,7 +401,7 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.GIT_BUILD }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
+          FW_VERSION: ${{ needs.package.outputs.fw_version }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', needs.firmware.outputs.fw_version) }}
           REPO: ${{ github.repository }}
           PAGES_URL: ${{ needs.pages.outputs.page_url || format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}
@@ -339,10 +413,14 @@ jobs:
           fi
           TAG="${RELEASE_TAG:-$FW_VERSION}"
           BASE_URL="https://github.com/$REPO/releases/download/$TAG"
-          FW_BIN="$BASE_URL/M5MonsterC5-CardputerADV-${FW_VERSION}.bin"
-          LAUNCHER_BIN="$BASE_URL/M5MonsterC5-CardputerADV-launcher-${FW_VERSION}.bin"
-          FULL_BIN="$BASE_URL/M5MonsterC5-CardputerADV-full-${FW_VERSION}.bin"
-          ZIP_BUNDLE="$BASE_URL/M5MonsterC5-CardputerADV-${FW_VERSION}.zip"
+          FW_ADV_BIN="$BASE_URL/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.bin"
+          FW_K132_BIN="$BASE_URL/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.bin"
+          LAUNCHER_ADV_BIN="$BASE_URL/M5MonsterC5-CardputerADV-adv-launcher-${FW_VERSION}.bin"
+          LAUNCHER_K132_BIN="$BASE_URL/M5MonsterC5-CardputerADV-k132-launcher-${FW_VERSION}.bin"
+          FULL_ADV_BIN="$BASE_URL/M5MonsterC5-CardputerADV-adv-full-${FW_VERSION}.bin"
+          FULL_K132_BIN="$BASE_URL/M5MonsterC5-CardputerADV-k132-full-${FW_VERSION}.bin"
+          ZIP_ADV="$BASE_URL/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.zip"
+          ZIP_K132="$BASE_URL/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.zip"
           RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
           PAGES_LINK="${PAGES_URL:-https://${GITHUB_REPOSITORY%/*}.github.io/${GITHUB_REPOSITORY#*/}/}"
           RELEASE_BODY=$(gh release view "$TAG" -R "$REPO" --json body --jq .body 2>/dev/null || true)
@@ -358,14 +436,22 @@ jobs:
               "${RELEASE_PAGE}" \
               "Web flasher:" \
               "${PAGES_LINK}" \
-              "JANOS_ADV_VERSION (${FW_VERSION}):" \
-              "${FW_BIN}" \
-              "Launcher:" \
-              "${LAUNCHER_BIN}" \
-              "Full flash image:" \
-              "${FULL_BIN}" \
-              "ZIP package:" \
-              "${ZIP_BUNDLE}" \
+              "ADV firmware (${FW_VERSION}):" \
+              "${FW_ADV_BIN}" \
+              "ADV launcher:" \
+              "${LAUNCHER_ADV_BIN}" \
+              "ADV full image:" \
+              "${FULL_ADV_BIN}" \
+              "ADV ZIP:" \
+              "${ZIP_ADV}" \
+              "K132 firmware (${FW_VERSION}):" \
+              "${FW_K132_BIN}" \
+              "K132 launcher:" \
+              "${LAUNCHER_K132_BIN}" \
+              "K132 full image:" \
+              "${FULL_K132_BIN}" \
+              "K132 ZIP:" \
+              "${ZIP_K132}" \
               "${RELEASE_BODY}"
           )
           payload=$(jq -n --arg content "$content" '{content:$content}')

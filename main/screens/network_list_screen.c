@@ -258,8 +258,6 @@ static void on_key(screen_t *self, key_code_t key)
             if (!data->focus_on_next) {
                 if (data->selected_index < data->count - 1) {
                     int old_idx = data->selected_index;
-                    int old_scroll = data->scroll_offset;
-                    
                     // Check if at last visible item on page - do page jump
                     if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
                         // Jump to next page - don't adjust back for partial pages

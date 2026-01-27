@@ -126,32 +126,45 @@ def main() -> int:
         version = None
 
     if src_bins.is_dir() and version:
-        base_bin = src_bins / "M5MonsterC5-CardputerADV.bin"
-        if base_bin.is_file():
-            shutil.copy2(base_bin, src_bins / "M5MonsterC5-CardputerADV-launcher.bin")
-            shutil.copy2(
-                base_bin, src_bins / f"M5MonsterC5-CardputerADV-launcher-{version}.bin"
-            )
-            shutil.copy2(
-                base_bin, src_bins / f"M5MonsterC5-CardputerADV-{version}.bin"
-            )
-        full_bin = src_bins / "M5MonsterC5-CardputerADV-full.bin"
-        if full_bin.is_file():
-            shutil.copy2(
-                full_bin, src_bins / f"M5MonsterC5-CardputerADV-full-{version}.bin"
-            )
+        for board in ("adv", "k132"):
+            board_dir = src_bins / board
+            if not board_dir.is_dir():
+                continue
+            base_bin = board_dir / "M5MonsterC5-CardputerADV.bin"
+            if base_bin.is_file():
+                shutil.copy2(base_bin, board_dir / f"M5MonsterC5-CardputerADV-{board}.bin")
+                shutil.copy2(
+                    base_bin, board_dir / f"M5MonsterC5-CardputerADV-{board}-{version}.bin"
+                )
+                shutil.copy2(
+                    base_bin, board_dir / f"M5MonsterC5-CardputerADV-{board}-launcher.bin"
+                )
+                shutil.copy2(
+                    base_bin, board_dir / f"M5MonsterC5-CardputerADV-{board}-launcher-{version}.bin"
+                )
+            full_bin = board_dir / f"M5MonsterC5-CardputerADV-{board}-full.bin"
+            if full_bin.is_file():
+                shutil.copy2(
+                    full_bin, board_dir / f"M5MonsterC5-CardputerADV-{board}-full-{version}.bin"
+                )
 
     dest_bins = repo_root / "tools" / "docker_bin_output"
     dest_bins.mkdir(parents=True, exist_ok=True)
     copied = []
     if src_bins.is_dir():
-        for item in src_bins.iterdir():
-            if not item.is_file():
+        for board in ("adv", "k132"):
+            board_dir = src_bins / board
+            if not board_dir.is_dir():
                 continue
-            if item.name.lower() == "readme.md":
-                continue  # skip local README file from being treated as an artifact
-            shutil.copy2(item, dest_bins / item.name)
-            copied.append(item.name)
+            dest_board = dest_bins / board
+            dest_board.mkdir(parents=True, exist_ok=True)
+            for item in board_dir.iterdir():
+                if not item.is_file():
+                    continue
+                if item.name.lower() == "readme.md":
+                    continue
+                shutil.copy2(item, dest_board / item.name)
+                copied.append(f"{board}/{item.name}")
 
     shutil.rmtree(tmpdir, ignore_errors=True)
 

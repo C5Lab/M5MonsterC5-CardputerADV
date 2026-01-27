@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>JanOS_ADV Web Flasher</title>
+  <title>JanOS Web Flasher</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
@@ -237,9 +237,9 @@
 <body>
   <div class="container">
     <header>
-      <div class="eyebrow">JanOS_ADV ESP32-S3</div>
-      <h1>Flash JanOS_ADV straight from your browser</h1>
-      <p>WebSerial flasher powered by esptool-js. Click Connect, pick the M5MonsterC5-CardputerADV serial port (Chrome/Edge desktop), then Flash to stream bootloader, partition table, and firmware from the latest GitHub Release.</p>
+      <div class="eyebrow">JanOS ESP32-S3</div>
+      <h1>Flash JanOS straight from your browser</h1>
+      <p>WebSerial flasher powered by esptool-js. Click Connect, pick the M5MonsterC5-Cardputer serial port (Chrome/Edge desktop), then Flash to stream bootloader, partition table, and firmware from the latest GitHub Release.</p>
     </header>
 
     <div class="split">
@@ -249,6 +249,10 @@
           <div class="actions">
             <button id="connectBtn">Connect</button>
             <button id="flashBtn" class="ghost" disabled>Flash</button>
+            <select id="boardSelect" aria-label="Board">
+              <option value="adv" selected>ADV</option>
+              <option value="k132">K132 (older)</option>
+            </select>
             <select id="branchSelect" aria-label="Branch">
               <option value="main" selected>Main</option>
               <option value="development">Development</option>
@@ -275,7 +279,7 @@
         <h2>Release info</h2>
         <p id="releaseInfo">Loading manifest</p>
         <div class="steps">
-          <li><strong>ROM mode:</strong> Hold BOOT on the M5MonsterC5-CardputerADV, plug the board in, then release.</li>
+          <li><strong>ROM mode:</strong> Hold BOOT on the M5MonsterC5-Cardputer, plug the board in, then release.</li>
           <li><strong>Close serial hogs:</strong> quit qFlipper/monitors or anything holding the COM port.</li>
           <li><strong>Stuck-</strong> Unplug, re-run Connect, plug again with BOOT held, then Flash.</li>
           <li><strong>Reset:</strong> after flashing, press RESET on the board if it does not auto-reboot.</li>
@@ -299,7 +303,7 @@
     </div>
   </div>
   <footer>
-    M5MonsterC5-CardputerADV -
+    M5MonsterC5-Cardputer -
     <span id="pageVersion" class="mono">Web flasher v1.0.0</span>.
   </footer>
 
@@ -316,6 +320,7 @@
       flashBtn: document.getElementById("flashBtn"),
       baud: document.getElementById("baudSelect"),
       branch: document.getElementById("branchSelect"),
+      board: document.getElementById("boardSelect"),
       releaseInfo: document.getElementById("releaseInfo"),
       pageVersion: document.getElementById("pageVersion"),
     };
@@ -366,6 +371,12 @@
       if(auto) {
         const normalized = auto.trim().toLowerCase();
         state.autoFlash = normalized === "1" || normalized === "true" || normalized === "yes";
+      }
+      const board = params.get("board");
+      if(board) {
+        const normalized = board.trim().toLowerCase();
+        if(normalized === "k132") ui.board.value = "k132";
+        if(normalized === "adv") ui.board.value = "adv";
       }
     };
 
@@ -425,13 +436,18 @@
     };
 
     const getBranch = () => ui.branch.value || "main";
+    const getBoard = () => ui.board.value || "adv";
 
     const getManifestUrl = () => {
+      const board = getBoard();
       const branch = getBranch();
-      if (branch === "main") return "manifest.json";
+      if (branch === "main") {
+        return board === "k132" ? "manifest_k132.json" : "manifest.json";
+      }
       const repo = getRepoSlug();
       if (!repo) return "manifest.json";
-      return `https://raw.githubusercontent.com/${repo}/${branch}/docs/manifest.json`;
+      const manifestName = board === "k132" ? "manifest_k132.json" : "manifest.json";
+      return `https://raw.githubusercontent.com/${repo}/${branch}/docs/${manifestName}`;
     };
 
     const rewritePartsForBranch = (manifest, branch) => {
@@ -480,11 +496,11 @@
           }
         }
         ui.manifest.style.display = "inline-flex";
-        ui.manifest.textContent = `Build ${manifest.build || "n/a"} - ${releaseLabel} - ${getBranch()}`;
+        ui.manifest.textContent = `Build ${manifest.build || "n/a"} - ${releaseLabel} - ${getBranch()} - ${getBoard().toUpperCase()}`;
         setFooterVersion({ ...manifest, version: releaseLabel });
         const files = (manifest.parts || []).length;
         const releaseText = state.latestRelease ? ` - latest ${releaseLabel}` : "";
-        ui.releaseInfo.innerHTML = `<span class="badge">Manifest</span> ${manifest.name || "M5MonsterC5-CardputerADV"}${releaseText} - ${files} file(s) - chip ${manifest.chipFamily || "ESP32-S3"} - ${getBranch()}`;
+        ui.releaseInfo.innerHTML = `<span class="badge">Manifest</span> ${manifest.name || "M5MonsterC5-Cardputer"}${releaseText} - ${files} file(s) - chip ${manifest.chipFamily || "ESP32-S3"} - ${getBranch()} - ${getBoard().toUpperCase()}`;
         setStatus("Manifest loaded.");
       } catch (err) {
         setStatus("Manifest not found. Publish a release first.", "error");
@@ -705,6 +721,13 @@ const flash = async () => {
     ui.connectBtn.addEventListener("click", () => connect().catch(() => {}));
     ui.flashBtn.addEventListener("click", () => flash().catch(() => {}));
     ui.branch.addEventListener("change", () => {
+      state.manifest = null;
+      ui.manifest.style.display = "none";
+      ui.manifest.textContent = "";
+      ui.releaseInfo.textContent = "Loading manifest";
+      loadManifest().catch(() => {});
+    });
+    ui.board.addEventListener("change", () => {
       state.manifest = null;
       ui.manifest.style.display = "none";
       ui.manifest.textContent = "";

@@ -1,5 +1,5 @@
 /**
- * @file keyboard.c
+ * @file keyboard_adv.c
  * @brief Keyboard driver for M5Stack Cardputer ADV
  * 
  * Uses TCA8418 keyboard controller at I2C address 0x34

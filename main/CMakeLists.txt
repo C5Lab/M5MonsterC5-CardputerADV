@@ -1,3 +1,22 @@
+set(BOARD_SRCS "")
+if(NOT DEFINED BOARD OR BOARD STREQUAL "" OR BOARD STREQUAL ".")
+    set(BOARD "adv")
+endif()
+string(TOLOWER "${BOARD}" BOARD_LOWER)
+if(BOARD_LOWER STREQUAL "adv")
+    list(APPEND BOARD_SRCS
+        "drivers/keyboard_adv.c"
+        "drivers/buzzer_adv.c"
+    )
+elseif(BOARD_LOWER STREQUAL "k132")
+    list(APPEND BOARD_SRCS
+        "drivers/keyboard_k132.c"
+        "drivers/buzzer_k132.c"
+    )
+else()
+    message(FATAL_ERROR "Invalid BOARD: ${BOARD}. Use -DBOARD=adv or -DBOARD=k132.")
+endif()
+
 idf_component_register(
     SRCS 
         "main.c"
@@ -5,10 +24,9 @@ idf_component_register(
         "settings.c"
         "screen_manager.c"
         "drivers/display.c"
-        "drivers/keyboard.c"
         "drivers/screenshot.c"
         "drivers/battery.c"
-        "drivers/buzzer.c"
+        ${BOARD_SRCS}
         "ui/text_ui.c"
         "screens/home_screen.c"
         "screens/wifi_scan_screen.c"
@@ -80,3 +98,9 @@ idf_component_register(
         esp_adc
         nvs_flash
 )
+
+if(BOARD_LOWER STREQUAL "adv")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE BOARD_ADV=1)
+elseif(BOARD_LOWER STREQUAL "k132")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE BOARD_K132=1)
+endif()

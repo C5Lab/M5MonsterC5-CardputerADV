@@ -19,6 +19,8 @@ Defaults to running inside Docker (espressif/idf:v6.0-beta1).
 
 Options:
   --no-docker   Run idf.py directly (for GitHub Actions container job or host with esp-idf installed)
+Environment:
+  BOARD_LIST    Space-separated boards to build (default: "adv k132")
 EOF
 }
 
@@ -51,7 +53,10 @@ build_native() {
   if [[ "${IDF_TARGET}" == "esp32s3" && "${extra_flags}" != *"--preview"* ]]; then
     extra_flags="--preview ${extra_flags}"
   fi
-  idf.py ${extra_flags} build
+  local boards="${BOARD_LIST:-adv k132}"
+  for board in ${boards}; do
+    idf.py ${extra_flags} -B "build-${board}" -DBOARD="${board}" build
+  done
 }
 
 if [[ "$USE_DOCKER" == "0" || "$USE_DOCKER" == "false" ]]; then
@@ -65,10 +70,14 @@ docker run --rm \
   --workdir /project \
   --env IDF_TARGET=esp32s3 \
   --env IDF_PY_FLAGS="${IDF_PY_FLAGS:-}" \
+  --env BOARD_LIST="${BOARD_LIST:-}" \
   --volume "${APP_DIR}:/project" \
   --volume "${CACHE_DIR}:/root/.espressif" \
   "$IMAGE" \
   bash -c '. /opt/esp/idf/export.sh >/dev/null 2>&1; \
            extra="${IDF_PY_FLAGS:-}"; \
            [ "$IDF_TARGET" = "esp32s3" ] && case "$extra" in (*--preview*) ;; (*) extra="--preview $extra";; esac; \
-           idf.py $extra build'
+           boards="${BOARD_LIST:-adv k132}"; \
+           for board in $boards; do \
+             idf.py $extra -B "build-$board" -DBOARD="$board" build; \
+           done'
