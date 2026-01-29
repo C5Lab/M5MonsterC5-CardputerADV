@@ -356,9 +356,30 @@ void ui_show_message(const char *title, const char *message)
     
     // Draw message
     if (message) {
-        int msg_len = strlen(message);
-        int msg_x = box_x + (box_w - msg_len * FONT_WIDTH) / 2;
-        ui_draw_text(msg_x, box_y + 28, message, UI_COLOR_TEXT, RGB565(0, 40, 20));
+        if (strchr(message, '\n') != NULL) {
+            char msg_buf[192];
+            snprintf(msg_buf, sizeof(msg_buf), "%s", message);
+            int line = 0;
+            char *token = strtok(msg_buf, "\n");
+            while (token != NULL) {
+                int msg_len = strlen(token);
+                int msg_x = box_x + (box_w - msg_len * FONT_WIDTH) / 2;
+                if (msg_x < box_x + 4) {
+                    msg_x = box_x + 4;
+                }
+                ui_draw_text(msg_x,
+                             box_y + 24 + line * (FONT_HEIGHT + 2),
+                             token,
+                             UI_COLOR_TEXT,
+                             RGB565(0, 40, 20));
+                line++;
+                token = strtok(NULL, "\n");
+            }
+        } else {
+            int msg_len = strlen(message);
+            int msg_x = box_x + (box_w - msg_len * FONT_WIDTH) / 2;
+            ui_draw_text(msg_x, box_y + 28, message, UI_COLOR_TEXT, RGB565(0, 40, 20));
+        }
     }
 }
 
