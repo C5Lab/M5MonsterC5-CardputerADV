@@ -37,6 +37,32 @@ OFFSETS = {
     "app": "0x10000",
 }
 
+def detect_board_by_files():
+    if (os.path.exists("bootloader-k132.bin") and os.path.exists("partition-table-k132.bin")) or \
+       os.path.exists("M5MonsterC5-CardputerADV-k132.bin"):
+        return "k132"
+    if (os.path.exists("bootloader-adv.bin") and os.path.exists("partition-table-adv.bin")) or \
+       os.path.exists("M5MonsterC5-CardputerADV-adv.bin"):
+        return "adv"
+    return None
+
+def detect_board_by_path():
+    cwd = os.getcwd().lower()
+    if cwd.endswith(os.sep + "k132") or (os.sep + "k132" + os.sep) in cwd:
+        return "k132"
+    if cwd.endswith(os.sep + "adv") or (os.sep + "adv" + os.sep) in cwd:
+        return "adv"
+    return None
+
+def choose_board_interactive():
+    print(f"{YELLOW}Select target board:{RESET}")
+    print("  1) ADV")
+    print("  2) K132")
+    choice = input("> ").strip()
+    if choice == "2":
+        return "k132"
+    return "adv"
+
 def board_files(board):
     suffix = board.lower()
     return {
@@ -159,8 +185,8 @@ def main():
     parser.add_argument("--port", help="Known serial port (e.g., COM10 or /dev/ttyACM0)")
     parser.add_argument("baud", nargs="?", type=int, default=DEFAULT_BAUD,
                         help=f"Optional baud rate (default: {DEFAULT_BAUD})")
-    parser.add_argument("--board", default=DEFAULT_BOARD, choices=["adv", "k132"],
-                        help="Target board (adv or k132). Default: adv.")
+    parser.add_argument("--board", default=None, choices=["adv", "k132"],
+                        help="Target board (adv or k132). Default: auto-detect by folder/files.")
     parser.add_argument("--monitor", action="store_true", help="Open serial monitor after flashing")
     parser.add_argument("--erase", action="store_true", help="Full erase before flashing (fixes stale NVS/partitions)")
     parser.add_argument("--flash-mode", default="dio", choices=["dio", "qio", "dout", "qout"],
@@ -169,7 +195,10 @@ def main():
                         help="Flash frequency (default: 80m). If you see boot loops, try 40m.")
     args = parser.parse_args()
 
-    files = board_files(args.board)
+    board = args.board or detect_board_by_files() or detect_board_by_path()
+    if not board:
+        board = choose_board_interactive()
+    files = board_files(board)
     check_files(files)
 
     print(f"{CYAN}ESP32-S3 flasher version: {VERSION}{RESET}")

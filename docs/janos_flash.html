@@ -428,10 +428,15 @@
       let cleaned = path.startsWith("/") ? path.slice(1) : path;
       const repo = getRepoSlug();
       if (!repo) return cleaned;
-      if (cleaned.startsWith("firmware/")) {
-        cleaned = cleaned.replace(/^firmware\//, "binaries-esp32s3/");
-      }
       const branch = getBranch();
+      if (branch === "main") {
+        // Use paths as-is so GitHub Pages can serve /firmware/*
+        return cleaned;
+      }
+      // For non-main branches, fetch from repo's docs/ directory.
+      if (cleaned.startsWith("firmware/")) {
+        cleaned = cleaned.replace(/^firmware\//, "docs/firmware/");
+      }
       return `https://raw.githubusercontent.com/${repo}/${branch}/${cleaned}`;
     };
 

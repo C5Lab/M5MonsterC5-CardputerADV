@@ -1,0 +1,11 @@
+{
+  "name": "M5MonsterC5-CardputerADV ESP32-S3 (K132)",
+  "version": "latest",
+  "build": "latest",
+  "chipFamily": "ESP32-S3",
+  "parts": [
+    { "path": "firmware/k132/bootloader.bin", "offset": 0 },
+    { "path": "firmware/k132/partition-table.bin", "offset": 32768 },
+    { "path": "firmware/k132/M5MonsterC5-CardputerADV.bin", "offset": 65536 }
+  ]
+}

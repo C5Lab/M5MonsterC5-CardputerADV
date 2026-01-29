@@ -106,6 +106,7 @@ jobs:
           print(m.group(1))
           PY
           )
+          cp "binaries-esp32s3/flash_board.py" "release_artifacts/firmware/flash_board.py"
           for board in adv k132; do
             src_dir="release_artifacts/firmware/${board}"
             src="${src_dir}/M5MonsterC5-CardputerADV.bin"
@@ -218,57 +219,20 @@ jobs:
               "firmware/${board}/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.bin"
               "firmware/${board}/M5MonsterC5-CardputerADV-${board}-launcher-${FW_VERSION}.bin"
               "firmware/${board}/M5MonsterC5-CardputerADV-${board}-launcher.bin"
-              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.zip"
             )
             out="bundle/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.zip"
             rm -f "$out"
             zip -9 "$out" "${files[@]}"
           done
 
-      - name: Delete existing assets (rebuild)
-        if: github.event_name == 'workflow_dispatch' && inputs.rebuild_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.meta.outputs.tag }}
-        run: |
-          set -euo pipefail
-          assets=(
-            "flash_board.py"
-            "adv/flash_board.py"
-            "bootloader-adv.bin"
-            "partition-table-adv.bin"
-            "M5MonsterC5-CardputerADV-adv-full.bin"
-            "M5MonsterC5-CardputerADV-adv-full-${{ needs.package.outputs.fw_version }}.bin"
-            "M5MonsterC5-CardputerADV-adv.bin"
-            "M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.bin"
-            "M5MonsterC5-CardputerADV-adv-launcher.bin"
-            "M5MonsterC5-CardputerADV-adv-launcher-${{ needs.package.outputs.fw_version }}.bin"
-            "M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.zip"
-            "k132/flash_board.py"
-            "bootloader-k132.bin"
-            "partition-table-k132.bin"
-            "M5MonsterC5-CardputerADV-k132-full.bin"
-            "M5MonsterC5-CardputerADV-k132-full-${{ needs.package.outputs.fw_version }}.bin"
-            "M5MonsterC5-CardputerADV-k132.bin"
-            "M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.bin"
-            "M5MonsterC5-CardputerADV-k132-launcher.bin"
-            "M5MonsterC5-CardputerADV-k132-launcher-${{ needs.package.outputs.fw_version }}.bin"
-            "M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.zip"
-          )
-          for name in "${assets[@]}"; do
-            if gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq ".assets[].name" | grep -qx "$name"; then
-              gh release delete-asset "$TAG" "$name" -R "$GITHUB_REPOSITORY" -y
-            fi
-          done
-
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: ${{ format('M5MonsterC5-CardputerADV {0}', needs.package.outputs.fw_version) }}
+          name: ${{ format('v{0} - M5MonsterC5 Cardputer (ADV + K132)', needs.package.outputs.fw_version) }}
+          overwrite_files: true
           files: |
             release_artifacts/firmware/flash_board.py
-            release_artifacts/firmware/adv/flash_board.py
             release_artifacts/firmware/adv/bootloader-adv.bin
             release_artifacts/firmware/adv/partition-table-adv.bin
             release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-full.bin
@@ -277,8 +241,6 @@ jobs:
             release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.bin
             release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-launcher.bin
             release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-launcher-${{ needs.package.outputs.fw_version }}.bin
-            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.zip
-            release_artifacts/firmware/k132/flash_board.py
             release_artifacts/firmware/k132/bootloader-k132.bin
             release_artifacts/firmware/k132/partition-table-k132.bin
             release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-full.bin
@@ -287,7 +249,6 @@ jobs:
             release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.bin
             release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-launcher.bin
             release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-launcher-${{ needs.package.outputs.fw_version }}.bin
-            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.zip
             release_artifacts/bundle/M5MonsterC5-CardputerADV-adv-${{ needs.package.outputs.fw_version }}.zip
             release_artifacts/bundle/M5MonsterC5-CardputerADV-k132-${{ needs.package.outputs.fw_version }}.zip
         env:
@@ -381,7 +342,7 @@ jobs:
           BUILD_TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
-          python -c "import os, json; from pathlib import Path; version=os.getenv('FW_VERSION') or os.getenv('BUILD_TAG'); build=os.getenv('BUILD_TAG','manual'); base={'version':version,'build':build,'chipFamily':'ESP32-S3'}; adv={'name':'M5MonsterC5-CardputerADV ESP32-S3 (ADV)','parts':[{'path':'firmware/adv/bootloader.bin','offset':8192},{'path':'firmware/adv/partition-table.bin','offset':32768},{'path':'firmware/adv/M5MonsterC5-CardputerADV.bin','offset':65536}]}; k132={'name':'M5MonsterC5-CardputerADV ESP32-S3 (K132)','parts':[{'path':'firmware/k132/bootloader.bin','offset':8192},{'path':'firmware/k132/partition-table.bin','offset':32768},{'path':'firmware/k132/M5MonsterC5-CardputerADV.bin','offset':65536}]}; Path('docs/manifest.json').write_text(json.dumps({**base, **adv}, indent=2)); Path('docs/manifest_k132.json').write_text(json.dumps({**base, **k132}, indent=2))"
+          python -c "import os, json; from pathlib import Path; version=os.getenv('FW_VERSION') or os.getenv('BUILD_TAG'); build=os.getenv('BUILD_TAG','manual'); base={'version':version,'build':build,'chipFamily':'ESP32-S3'}; adv={'name':'M5MonsterC5-CardputerADV ESP32-S3 (ADV)','parts':[{'path':'firmware/adv/bootloader.bin','offset':0},{'path':'firmware/adv/partition-table.bin','offset':32768},{'path':'firmware/adv/M5MonsterC5-CardputerADV.bin','offset':65536}]}; k132={'name':'M5MonsterC5-CardputerADV ESP32-S3 (K132)','parts':[{'path':'firmware/k132/bootloader.bin','offset':0},{'path':'firmware/k132/partition-table.bin','offset':32768},{'path':'firmware/k132/M5MonsterC5-CardputerADV.bin','offset':65536}]}; Path('docs/manifest.json').write_text(json.dumps({**base, **adv}, indent=2)); Path('docs/manifest_k132.json').write_text(json.dumps({**base, **k132}, indent=2))"
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -402,7 +363,7 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.GIT_BUILD }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FW_VERSION: ${{ needs.package.outputs.fw_version }}
-          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', needs.firmware.outputs.fw_version) }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', needs.package.outputs.fw_version) }}
           REPO: ${{ github.repository }}
           PAGES_URL: ${{ needs.pages.outputs.page_url || format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}
         run: |
