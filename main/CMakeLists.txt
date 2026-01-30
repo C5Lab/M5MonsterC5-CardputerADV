@@ -71,6 +71,8 @@ idf_component_register(
         "screens/settings_screen.c"
         "screens/uart_pins_screen.c"
         "screens/vendor_lookup_screen.c"
+        "screens/gps_module_screen.c"
+        "screens/gps_raw_screen.c"
         "screens/network_attacks_screen.c"
         "screens/wifi_connect_screen.c"
         "screens/arp_hosts_screen.c"

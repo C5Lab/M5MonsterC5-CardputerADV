@@ -61,6 +61,18 @@ esp_err_t uart_send_command(const char *cmd);
 void uart_register_line_callback(uart_response_callback_t callback, void *user_data);
 
 /**
+ * @brief Register a monitor callback that always receives lines
+ * @param callback Function to call for each line received
+ * @param user_data User data to pass to callback
+ */
+void uart_register_monitor_callback(uart_response_callback_t callback, void *user_data);
+
+/**
+ * @brief Clear registered monitor callback
+ */
+void uart_clear_monitor_callback(void);
+
+/**
  * @brief Clear registered line callback
  */
 void uart_clear_line_callback(void);

@@ -23,6 +23,9 @@ static TaskHandle_t uart_task_handle = NULL;
 // Line callback
 static uart_response_callback_t line_callback = NULL;
 static void *line_callback_user_data = NULL;
+// Monitor callback (always active)
+static uart_response_callback_t monitor_callback = NULL;
+static void *monitor_callback_user_data = NULL;
 
 // Scan state
 static bool is_scanning = false;
@@ -125,6 +128,11 @@ static bool parse_network_line(const char *line, wifi_network_t *network)
 static void process_line(const char *line)
 {
     ESP_LOGI(TAG, "RX: %s", line);
+
+    // Call monitor callback if registered (does not interfere with line callback)
+    if (monitor_callback) {
+        monitor_callback(line, monitor_callback_user_data);
+    }
 
     // Call line callback if registered
     if (line_callback) {
@@ -279,11 +287,27 @@ void uart_register_line_callback(uart_response_callback_t callback, void *user_d
     xSemaphoreGive(uart_mutex);
 }
 
+void uart_register_monitor_callback(uart_response_callback_t callback, void *user_data)
+{
+    xSemaphoreTake(uart_mutex, portMAX_DELAY);
+    monitor_callback = callback;
+    monitor_callback_user_data = user_data;
+    xSemaphoreGive(uart_mutex);
+}
+
 void uart_clear_line_callback(void)
 {
     xSemaphoreTake(uart_mutex, portMAX_DELAY);
     line_callback = NULL;
     line_callback_user_data = NULL;
+    xSemaphoreGive(uart_mutex);
+}
+
+void uart_clear_monitor_callback(void)
+{
+    xSemaphoreTake(uart_mutex, portMAX_DELAY);
+    monitor_callback = NULL;
+    monitor_callback_user_data = NULL;
     xSemaphoreGive(uart_mutex);
 }
 

@@ -6,6 +6,7 @@
 #include "settings_screen.h"
 #include "uart_pins_screen.h"
 #include "vendor_lookup_screen.h"
+#include "gps_module_screen.h"
 #include "settings.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -17,8 +18,9 @@ static const char *TAG = "SETTINGS_SCREEN";
 // Menu item indices
 #define MENU_UART_PINS      0
 #define MENU_VENDOR_LOOKUP  1
-#define MENU_RED_TEAM       2
-#define MENU_ITEM_COUNT     3
+#define MENU_GPS_MODULE     2
+#define MENU_RED_TEAM       3
+#define MENU_ITEM_COUNT     4
 
 // Screen user data
 typedef struct {
@@ -36,6 +38,9 @@ static void draw_menu_item_at(int index, bool selected)
             break;
         case MENU_VENDOR_LOOKUP:
             ui_draw_menu_item(index + 1, "Vendor Lookup", selected, false, false);
+            break;
+        case MENU_GPS_MODULE:
+            ui_draw_menu_item(index + 1, "GPS", selected, false, false);
             break;
         case MENU_RED_TEAM:
             ui_draw_menu_item(index + 1, "Enable Red Team", selected, true, red_team);
@@ -119,6 +124,9 @@ static void on_key(screen_t *self, key_code_t key)
                         break;
                     case MENU_VENDOR_LOOKUP:
                         screen_manager_push(vendor_lookup_screen_create, NULL);
+                        break;
+                    case MENU_GPS_MODULE:
+                        screen_manager_push(gps_module_screen_create, NULL);
                         break;
                     case MENU_RED_TEAM:
                         if (settings_get_red_team_enabled()) {
