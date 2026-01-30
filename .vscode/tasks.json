@@ -14,21 +14,21 @@
           "-ExecutionPolicy",
           "Bypass",
           "-Command",
-          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv build"
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv build"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
         ]
       },
       "group": "build",
@@ -47,21 +47,21 @@
           "-ExecutionPolicy",
           "Bypass",
           "-Command",
-          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 build"
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 build"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
         ]
       },
       "group": "build",
@@ -71,7 +71,7 @@
       "label": "Flash ADV",
       "type": "shell",
       "command": "idf.py",
-      "args": ["-B", "build-adv", "-DBOARD=adv", "flash"],
+      "args": ["-B", "build-adv", "-DBOARD=adv", "-p", "${config:idf.port}", "flash"],
       "options": { "cwd": "${workspaceFolder}" },
       "windows": {
         "command": "powershell",
@@ -80,21 +80,21 @@
           "-ExecutionPolicy",
           "Bypass",
           "-Command",
-          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv flash"
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} flash"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv flash"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} flash"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv flash"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} flash"
         ]
       },
       "group": "build",
@@ -104,7 +104,7 @@
       "label": "Flash K132",
       "type": "shell",
       "command": "idf.py",
-      "args": ["-B", "build-k132", "-DBOARD=k132", "flash"],
+      "args": ["-B", "build-k132", "-DBOARD=k132", "-p", "${config:idf.port}", "flash"],
       "options": { "cwd": "${workspaceFolder}" },
       "windows": {
         "command": "powershell",
@@ -113,21 +113,21 @@
           "-ExecutionPolicy",
           "Bypass",
           "-Command",
-          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 flash"
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} flash"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 flash"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} flash"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 flash"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} flash"
         ]
       },
       "group": "build",
@@ -146,21 +146,21 @@
           "-ExecutionPolicy",
           "Bypass",
           "-Command",
-          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv fullclean"
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv fullclean"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
         ]
       },
       "group": "build",
@@ -186,21 +186,21 @@
           "-ExecutionPolicy",
           "Bypass",
           "-Command",
-          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 fullclean"
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 fullclean"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
         ]
       },
       "group": "build",
@@ -217,7 +217,7 @@
       "label": "Monitor ADV",
       "type": "shell",
       "command": "idf.py",
-      "args": ["-B", "build-adv", "-DBOARD=adv", "monitor"],
+      "args": ["-B", "build-adv", "-DBOARD=adv", "-p", "${config:idf.port}", "monitor"],
       "options": { "cwd": "${workspaceFolder}" },
       "windows": {
         "command": "powershell",
@@ -226,21 +226,21 @@
           "-ExecutionPolicy",
           "Bypass",
           "-Command",
-          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv monitor"
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} monitor"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv monitor"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} monitor"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv monitor"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} monitor"
         ]
       },
       "group": "build",
@@ -250,7 +250,7 @@
       "label": "Monitor K132",
       "type": "shell",
       "command": "idf.py",
-      "args": ["-B", "build-k132", "-DBOARD=k132", "monitor"],
+      "args": ["-B", "build-k132", "-DBOARD=k132", "-p", "${config:idf.port}", "monitor"],
       "options": { "cwd": "${workspaceFolder}" },
       "windows": {
         "command": "powershell",
@@ -259,23 +259,37 @@
           "-ExecutionPolicy",
           "Bypass",
           "-Command",
-          "& \"${config:idf.currentSetup}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 monitor"
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} monitor"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 monitor"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} monitor"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 monitor"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} monitor"
         ]
       },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Flash+Monitor ADV",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Flash ADV", "Monitor ADV"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Flash+Monitor K132",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Flash K132", "Monitor K132"],
       "group": "build",
       "problemMatcher": []
     },
