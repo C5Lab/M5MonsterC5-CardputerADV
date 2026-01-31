@@ -4,7 +4,7 @@
 
 ---
 
-## Info
+## Info / Flash 
 
 The project is based on the ESP32C5-Wroom-1U and consists of two software components:
 
@@ -25,7 +25,7 @@ https://github.com/C5Lab/M5MonsterC5-CardputerADV/wiki
 
 ## Availability
 
-[The board will be available soon on Tindie.](https://www.tindie.com/products/lab/m5monsterc5-esp32c5-marauder/)
+[The board available on Tindie.](https://www.tindie.com/products/lab/m5monsterc5-esp32c5-marauder/)
 
 ## Community
 
