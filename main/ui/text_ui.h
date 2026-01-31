@@ -137,6 +137,7 @@ void ui_draw_box(int x, int y, int w, int h, uint16_t color);
  * @param message Message text
  */
 void ui_show_message(const char *title, const char *message);
+void ui_show_message_tall(const char *title, const char *message);
 
 #endif // TEXT_UI_H
 

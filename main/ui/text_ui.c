@@ -332,11 +332,10 @@ void ui_draw_box(int x, int y, int w, int h, uint16_t color)
     display_draw_rect(x, y, w, h, color);
 }
 
-void ui_show_message(const char *title, const char *message)
+static void ui_show_message_impl(const char *title, const char *message, int box_h)
 {
     // Calculate box dimensions
     int box_w = DISPLAY_WIDTH - 20;
-    int box_h = 60;
     int box_x = 10;
     int box_y = (DISPLAY_HEIGHT - box_h) / 2;
     
@@ -356,10 +355,41 @@ void ui_show_message(const char *title, const char *message)
     
     // Draw message
     if (message) {
-        int msg_len = strlen(message);
-        int msg_x = box_x + (box_w - msg_len * FONT_WIDTH) / 2;
-        ui_draw_text(msg_x, box_y + 28, message, UI_COLOR_TEXT, RGB565(0, 40, 20));
+        if (strchr(message, '\n') != NULL) {
+            char msg_buf[192];
+            snprintf(msg_buf, sizeof(msg_buf), "%s", message);
+            int line = 0;
+            char *token = strtok(msg_buf, "\n");
+            while (token != NULL) {
+                int msg_len = strlen(token);
+                int msg_x = box_x + (box_w - msg_len * FONT_WIDTH) / 2;
+                if (msg_x < box_x + 4) {
+                    msg_x = box_x + 4;
+                }
+                ui_draw_text(msg_x,
+                             box_y + 24 + line * (FONT_HEIGHT + 2),
+                             token,
+                             UI_COLOR_TEXT,
+                             RGB565(0, 40, 20));
+                line++;
+                token = strtok(NULL, "\n");
+            }
+        } else {
+            int msg_len = strlen(message);
+            int msg_x = box_x + (box_w - msg_len * FONT_WIDTH) / 2;
+            ui_draw_text(msg_x, box_y + 28, message, UI_COLOR_TEXT, RGB565(0, 40, 20));
+        }
     }
+}
+
+void ui_show_message(const char *title, const char *message)
+{
+    ui_show_message_impl(title, message, 60);
+}
+
+void ui_show_message_tall(const char *title, const char *message)
+{
+    ui_show_message_impl(title, message, 96);
 }
 
 
