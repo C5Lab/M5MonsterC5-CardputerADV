@@ -138,6 +138,12 @@ void keyboard_process(void);
 void keyboard_register_callback(key_event_callback_t callback);
 
 /**
+ * @brief Enable or disable forwarding key events to callback handlers
+ * @param enabled true to call registered callback, false to suppress it
+ */
+void keyboard_set_callback_enabled(bool enabled);
+
+/**
  * @brief Get last pressed key
  * @return Key code of last pressed key, or KEY_NONE
  */
