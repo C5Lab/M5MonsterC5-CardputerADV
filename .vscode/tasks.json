@@ -28,7 +28,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
         ]
       },
       "group": "build",
@@ -61,7 +61,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
         ]
       },
       "group": "build",
@@ -71,7 +71,7 @@
       "label": "Flash ADV",
       "type": "shell",
       "command": "idf.py",
-      "args": ["-B", "build-adv", "-DBOARD=adv", "flash"],
+      "args": ["-B", "build-adv", "-DBOARD=adv", "-p", "${config:idf.port}", "flash"],
       "options": { "cwd": "${workspaceFolder}" },
       "windows": {
         "command": "powershell",
@@ -94,7 +94,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv flash"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} flash"
         ]
       },
       "group": "build",
@@ -127,7 +127,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 flash"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} flash"
         ]
       },
       "group": "build",
@@ -160,7 +160,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
         ]
       },
       "group": "build",
@@ -200,7 +200,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
         ]
       },
       "group": "build",
@@ -240,7 +240,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv monitor"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} monitor"
         ]
       },
       "group": "build",
@@ -273,7 +273,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "source \"${config:idf.currentSetup}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 monitor"
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} monitor"
         ]
       },
       "group": "build",
