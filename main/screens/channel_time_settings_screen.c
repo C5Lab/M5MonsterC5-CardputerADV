@@ -231,12 +231,22 @@ static void on_key(screen_t *self, key_code_t key)
                 data->saved = false;
                 data->status_msg[0] = '\0';
                 draw_screen(self);
+            } else {
+                data->selected_field = FIELD_COUNT - 1;
+                data->saved = false;
+                data->status_msg[0] = '\0';
+                draw_screen(self);
             }
             break;
             
         case KEY_DOWN:
             if (data->selected_field < FIELD_COUNT - 1) {
                 data->selected_field++;
+                data->saved = false;
+                data->status_msg[0] = '\0';
+                draw_screen(self);
+            } else {
+                data->selected_field = 0;
                 data->saved = false;
                 data->status_msg[0] = '\0';
                 draw_screen(self);

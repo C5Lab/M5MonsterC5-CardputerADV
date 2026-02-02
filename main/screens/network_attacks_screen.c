@@ -73,17 +73,25 @@ static void on_key(screen_t *self, key_code_t key)
     
     switch (key) {
         case KEY_UP:
-            if (data->selected_index > 0) {
+            if (data->menu_count > 0 && data->selected_index > 0) {
                 int old = data->selected_index;
                 data->selected_index--;
+                redraw_selection(data, old, data->selected_index);
+            } else if (data->menu_count > 0) {
+                int old = data->selected_index;
+                data->selected_index = data->menu_count - 1;
                 redraw_selection(data, old, data->selected_index);
             }
             break;
             
         case KEY_DOWN:
-            if (data->selected_index < data->menu_count - 1) {
+            if (data->menu_count > 0 && data->selected_index < data->menu_count - 1) {
                 int old = data->selected_index;
                 data->selected_index++;
+                redraw_selection(data, old, data->selected_index);
+            } else if (data->menu_count > 0) {
+                int old = data->selected_index;
+                data->selected_index = 0;
                 redraw_selection(data, old, data->selected_index);
             }
             break;

@@ -191,6 +191,10 @@ static void on_key(screen_t *self, key_code_t key)
                         }
                     }
                 }
+            } else if (data->file_count > 0) {
+                data->selected_index = data->file_count - 1;
+                data->scroll_offset = (data->selected_index / visible_rows) * visible_rows;
+                draw_screen(self);
             }
             break;
             
@@ -215,6 +219,10 @@ static void on_key(screen_t *self, key_code_t key)
                         }
                     }
                 }
+            } else if (data->file_count > 0) {
+                data->selected_index = 0;
+                data->scroll_offset = 0;
+                draw_screen(self);
             }
             break;
             

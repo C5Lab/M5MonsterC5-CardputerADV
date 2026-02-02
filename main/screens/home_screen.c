@@ -125,6 +125,10 @@ static void on_key(screen_t *self, key_code_t key)
                     data->selected_index--;
                     redraw_two_items(data, old_index, data->selected_index);
                 }
+            } else if ((int)MENU_ITEM_COUNT > 0) {
+                data->selected_index = (int)MENU_ITEM_COUNT - 1;
+                data->scroll_offset = (data->selected_index / VISIBLE_ITEMS) * VISIBLE_ITEMS;
+                draw_screen(self);
             }
             break;
             
@@ -142,6 +146,10 @@ static void on_key(screen_t *self, key_code_t key)
                 } else {
                     redraw_two_items(data, old_index, data->selected_index);
                 }
+            } else if ((int)MENU_ITEM_COUNT > 0) {
+                data->selected_index = 0;
+                data->scroll_offset = 0;
+                draw_screen(self);
             }
             break;
             

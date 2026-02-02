@@ -115,6 +115,15 @@ static void on_key(screen_t *self, key_code_t key)
                 // Redraw only 2 rows
                 redraw_row(data, old_idx);
                 redraw_row(data, data->selected_index);
+            } else if ((int)OPTION_COUNT > 0) {
+                int old_idx = data->selected_index;
+                data->selected_index = (int)OPTION_COUNT - 1;
+                if (data->saved) {
+                    data->saved = false;
+                    display_fill_rect(0, 5 * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+                }
+                redraw_row(data, old_idx);
+                redraw_row(data, data->selected_index);
             }
             break;
             
@@ -128,6 +137,15 @@ static void on_key(screen_t *self, key_code_t key)
                     display_fill_rect(0, 5 * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
                 }
                 // Redraw only 2 rows
+                redraw_row(data, old_idx);
+                redraw_row(data, data->selected_index);
+            } else if ((int)OPTION_COUNT > 0) {
+                int old_idx = data->selected_index;
+                data->selected_index = 0;
+                if (data->saved) {
+                    data->saved = false;
+                    display_fill_rect(0, 5 * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+                }
                 redraw_row(data, old_idx);
                 redraw_row(data, data->selected_index);
             }

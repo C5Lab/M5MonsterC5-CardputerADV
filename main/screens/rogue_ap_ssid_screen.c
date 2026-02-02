@@ -102,6 +102,14 @@ static void on_key(screen_t *self, key_code_t key)
                     data->scroll_offset = data->selected_index;
                 }
                 draw_screen(self);
+            } else if (data->count > 0) {
+                data->selected_index = data->count - 1;
+                if (data->count > VISIBLE_ITEMS) {
+                    data->scroll_offset = data->count - VISIBLE_ITEMS;
+                } else {
+                    data->scroll_offset = 0;
+                }
+                draw_screen(self);
             }
             break;
             
@@ -111,6 +119,10 @@ static void on_key(screen_t *self, key_code_t key)
                 if (data->selected_index >= data->scroll_offset + VISIBLE_ITEMS) {
                     data->scroll_offset = data->selected_index - VISIBLE_ITEMS + 1;
                 }
+                draw_screen(self);
+            } else if (data->count > 0) {
+                data->selected_index = 0;
+                data->scroll_offset = 0;
                 draw_screen(self);
             }
             break;
