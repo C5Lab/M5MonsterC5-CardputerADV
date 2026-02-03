@@ -38,7 +38,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-adv\" \"adv\" \"build\""
+          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.espIdfPath}\" \"build-adv\" \"adv\" \"build\""
         ]
       },
       "group": "build",
@@ -127,7 +127,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-adv\" \"adv\" \"flash\" \"${config:idf.port}\""
+          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.espIdfPath}\" \"build-adv\" \"adv\" \"flash\" \"${config:idf.port}\""
         ]
       },
       "group": "build",
@@ -333,7 +333,7 @@
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-adv\" \"adv\" \"monitor\" \"${config:idf.port}\""
+          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.espIdfPath}\" \"build-adv\" \"adv\" \"monitor\" \"${config:idf.port}\""
         ]
       },
       "group": "build",
