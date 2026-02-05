@@ -11,6 +11,7 @@
 // Parameters for creating the Rogue AP password screen
 typedef struct {
     char ssid[33];  // Selected SSID
+    int network_id; // Selected network ID
 } rogue_ap_password_params_t;
 
 /**

@@ -170,26 +170,19 @@ static void on_key(screen_t *self, key_code_t key)
                         break;
                         
                     case ATTACK_ROGUE_AP:
-                        if (data->network_count == 1) {
+                        if (data->network_count != 1) {
+                            ui_show_message("Error", "Select exactly 1 network");
+                            draw_screen(self);
+                            break;
+                        }
+
+                        {
                             rogue_ap_password_params_t *params = malloc(sizeof(rogue_ap_password_params_t));
                             if (params) {
                                 strncpy(params->ssid, data->networks[0].ssid, sizeof(params->ssid) - 1);
                                 params->ssid[sizeof(params->ssid) - 1] = '\0';
+                                params->network_id = data->networks[0].id;
                                 screen_manager_push(rogue_ap_password_screen_create, params);
-                            }
-                        } else {
-                            rogue_ap_ssid_params_t *params = malloc(sizeof(rogue_ap_ssid_params_t));
-                            if (params) {
-                                params->networks = malloc(data->network_count * sizeof(wifi_network_t));
-                                params->count = data->network_count;
-                                
-                                if (params->networks) {
-                                    memcpy(params->networks, data->networks, 
-                                           data->network_count * sizeof(wifi_network_t));
-                                    screen_manager_push(rogue_ap_ssid_screen_create, params);
-                                } else {
-                                    free(params);
-                                }
                             }
                         }
                         break;

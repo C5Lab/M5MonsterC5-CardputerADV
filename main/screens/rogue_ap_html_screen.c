@@ -31,6 +31,7 @@ typedef struct {
     int scroll_offset;
     bool loading;
     bool needs_redraw;
+    int network_id;
     screen_t *self;
 } rogue_ap_html_data_t;
 
@@ -176,6 +177,13 @@ static void launch_rogue_ap(rogue_ap_html_data_t *data)
     if (data->file_count == 0 || data->selected_index >= data->file_count) {
         return;
     }
+
+    // Ensure the selected network is set before starting
+    if (data->network_id > 0) {
+        char select_cmd[32];
+        snprintf(select_cmd, sizeof(select_cmd), "select_networks %d", data->network_id);
+        uart_send_command(select_cmd);
+    }
     
     // Send select_html command
     char cmd[32];
@@ -299,6 +307,7 @@ screen_t* rogue_ap_html_screen_create(void *params)
     
     strncpy(data->ssid, html_params->ssid, sizeof(data->ssid) - 1);
     strncpy(data->password, html_params->password, sizeof(data->password) - 1);
+    data->network_id = html_params->network_id;
     data->loading = true;
     data->self = screen;
     free(html_params);

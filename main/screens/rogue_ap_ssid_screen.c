@@ -84,6 +84,7 @@ static void on_select(rogue_ap_ssid_data_t *data)
     if (params) {
         strncpy(params->ssid, chosen->ssid, sizeof(params->ssid) - 1);
         params->ssid[sizeof(params->ssid) - 1] = '\0';
+        params->network_id = chosen->id;
         
         ESP_LOGI(TAG, "Selected SSID: %s", params->ssid);
         screen_manager_push(rogue_ap_password_screen_create, params);
