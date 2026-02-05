@@ -28,6 +28,7 @@ static const gpio_num_t k132_col_pins[K132_COLS] = {
 // Key event queue
 static QueueHandle_t key_queue = NULL;
 static key_event_callback_t key_callback = NULL;
+static bool callback_enabled = true;
 static key_code_t last_key = KEY_NONE;
 static bool keyboard_initialized = false;
 
@@ -156,7 +157,7 @@ static void handle_key_event(uint8_t raw_row, uint8_t raw_col, bool pressed)
     last_key = key;
     xQueueSend(key_queue, &key, 0);
 
-    if (key_callback) {
+    if (callback_enabled && key_callback) {
         key_callback(key, true);
     }
 }
@@ -229,6 +230,11 @@ void keyboard_process(void)
 void keyboard_register_callback(key_event_callback_t callback)
 {
     key_callback = callback;
+}
+
+void keyboard_set_callback_enabled(bool enabled)
+{
+    callback_enabled = enabled;
 }
 
 key_code_t keyboard_get_key(void)

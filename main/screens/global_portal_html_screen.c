@@ -243,6 +243,10 @@ static void on_key(screen_t *self, key_code_t key)
                     data->selected_index--;
                     redraw_two_rows(data, old_idx, data->selected_index);
                 }
+            } else if (!data->loading && data->file_count > 0) {
+                data->selected_index = data->file_count - 1;
+                data->scroll_offset = (data->selected_index / VISIBLE_ITEMS) * VISIBLE_ITEMS;
+                draw_screen(self);
             }
             break;
             
@@ -259,6 +263,10 @@ static void on_key(screen_t *self, key_code_t key)
                     data->selected_index++;
                     redraw_two_rows(data, old_idx, data->selected_index);
                 }
+            } else if (!data->loading && data->file_count > 0) {
+                data->selected_index = 0;
+                data->scroll_offset = 0;
+                draw_screen(self);
             }
             break;
             

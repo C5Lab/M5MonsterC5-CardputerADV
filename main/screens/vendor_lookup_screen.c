@@ -122,12 +122,22 @@ static void on_key(screen_t *self, key_code_t key)
                 data->saved = false;
                 data->status_msg[0] = '\0';
                 draw_screen(self);
+            } else if (OPTION_COUNT > 0) {
+                data->selected_index = OPTION_COUNT - 1;
+                data->saved = false;
+                data->status_msg[0] = '\0';
+                draw_screen(self);
             }
             break;
             
         case KEY_DOWN:
             if (data->selected_index < OPTION_COUNT - 1) {
                 data->selected_index++;
+                data->saved = false;
+                data->status_msg[0] = '\0';
+                draw_screen(self);
+            } else if (OPTION_COUNT > 0) {
+                data->selected_index = 0;
                 data->saved = false;
                 data->status_msg[0] = '\0';
                 draw_screen(self);

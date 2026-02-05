@@ -286,12 +286,18 @@ static void on_key(screen_t *self, key_code_t key)
             if (data->scroll_offset > 0) {
                 data->scroll_offset--;
                 draw_screen(self);
+            } else if (data->line_count > CONTENT_ROWS) {
+                data->scroll_offset = data->line_count - CONTENT_ROWS;
+                draw_screen(self);
             }
             break;
             
         case KEY_DOWN:
             if (data->scroll_offset + CONTENT_ROWS < data->line_count) {
                 data->scroll_offset++;
+                draw_screen(self);
+            } else if (data->line_count > CONTENT_ROWS) {
+                data->scroll_offset = 0;
                 draw_screen(self);
             }
             break;

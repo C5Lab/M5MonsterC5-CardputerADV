@@ -217,6 +217,10 @@ static void on_key(screen_t *self, key_code_t key)
                 data->scroll_offset -= visible_rows;
                 if (data->scroll_offset < 0) data->scroll_offset = 0;
                 draw_screen(self);
+            } else if (data->device_count > visible_rows) {
+                int max_offset = ((data->device_count - 1) / visible_rows) * visible_rows;
+                data->scroll_offset = max_offset;
+                draw_screen(self);
             }
             break;
             
@@ -224,6 +228,9 @@ static void on_key(screen_t *self, key_code_t key)
             if (data->scroll_offset + visible_rows < data->device_count) {
                 // Page jump down - don't adjust back for partial pages
                 data->scroll_offset += visible_rows;
+                draw_screen(self);
+            } else if (data->device_count > visible_rows) {
+                data->scroll_offset = 0;
                 draw_screen(self);
             }
             break;

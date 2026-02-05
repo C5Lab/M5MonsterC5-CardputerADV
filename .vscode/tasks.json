@@ -5,10 +5,17 @@
       "label": "Build ADV",
       "type": "shell",
       "command": "idf.py",
-      "args": ["-B", "build-adv", "-DBOARD=adv", "build"],
-      "options": { "cwd": "${workspaceFolder}" },
+      "args": [
+        "-B",
+        "build-adv",
+        "-DBOARD=adv",
+        "build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "windows": {
-        "command": "powershell",
+        "command": "cmd",
         "args": [
           "-NoProfile",
           "-ExecutionPolicy",
@@ -38,10 +45,17 @@
       "label": "Build K132",
       "type": "shell",
       "command": "idf.py",
-      "args": ["-B", "build-k132", "-DBOARD=k132", "build"],
-      "options": { "cwd": "${workspaceFolder}" },
+      "args": [
+        "-B",
+        "build-k132",
+        "-DBOARD=k132",
+        "build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "windows": {
-        "command": "powershell",
+        "command": "cmd",
         "args": [
           "-NoProfile",
           "-ExecutionPolicy",
@@ -74,7 +88,7 @@
       "args": ["-B", "build-adv", "-DBOARD=adv", "-p", "${config:idf.port}", "flash"],
       "options": { "cwd": "${workspaceFolder}" },
       "windows": {
-        "command": "powershell",
+        "command": "cmd",
         "args": [
           "-NoProfile",
           "-ExecutionPolicy",
@@ -107,7 +121,7 @@
       "args": ["-B", "build-k132", "-DBOARD=k132", "-p", "${config:idf.port}", "flash"],
       "options": { "cwd": "${workspaceFolder}" },
       "windows": {
-        "command": "powershell",
+        "command": "cmd",
         "args": [
           "-NoProfile",
           "-ExecutionPolicy",
@@ -137,8 +151,15 @@
       "label": "Clean ADV",
       "type": "shell",
       "command": "idf.py",
-      "args": ["-B", "build-adv", "-DBOARD=adv", "fullclean"],
-      "options": { "cwd": "${workspaceFolder}" },
+      "args": [
+        "-B",
+        "build-adv",
+        "-DBOARD=adv",
+        "fullclean"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "windows": {
         "command": "powershell",
         "args": [
@@ -169,7 +190,11 @@
     {
       "label": "Clean+Build+Flash ADV",
       "dependsOrder": "sequence",
-      "dependsOn": ["Clean ADV", "Build ADV", "Flash ADV"],
+      "dependsOn": [
+        "Clean ADV",
+        "Build ADV",
+        "Flash ADV"
+      ],
       "group": "build",
       "problemMatcher": []
     },
@@ -177,8 +202,15 @@
       "label": "Clean K132",
       "type": "shell",
       "command": "idf.py",
-      "args": ["-B", "build-k132", "-DBOARD=k132", "fullclean"],
-      "options": { "cwd": "${workspaceFolder}" },
+      "args": [
+        "-B",
+        "build-k132",
+        "-DBOARD=k132",
+        "fullclean"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "windows": {
         "command": "powershell",
         "args": [
@@ -209,7 +241,11 @@
     {
       "label": "Clean+Build+Flash K132",
       "dependsOrder": "sequence",
-      "dependsOn": ["Clean K132", "Build K132", "Flash K132"],
+      "dependsOn": [
+        "Clean K132",
+        "Build K132",
+        "Flash K132"
+      ],
       "group": "build",
       "problemMatcher": []
     },
@@ -220,7 +256,7 @@
       "args": ["-B", "build-adv", "-DBOARD=adv", "-p", "${config:idf.port}", "monitor"],
       "options": { "cwd": "${workspaceFolder}" },
       "windows": {
-        "command": "powershell",
+        "command": "cmd",
         "args": [
           "-NoProfile",
           "-ExecutionPolicy",
@@ -253,7 +289,7 @@
       "args": ["-B", "build-k132", "-DBOARD=k132", "-p", "${config:idf.port}", "monitor"],
       "options": { "cwd": "${workspaceFolder}" },
       "windows": {
-        "command": "powershell",
+        "command": "cmd",
         "args": [
           "-NoProfile",
           "-ExecutionPolicy",
@@ -296,28 +332,44 @@
     {
       "label": "Clean+Build+Flash+Monitor ADV",
       "dependsOrder": "sequence",
-      "dependsOn": ["Clean ADV", "Build ADV", "Flash ADV", "Monitor ADV"],
+      "dependsOn": [
+        "Clean ADV",
+        "Build ADV",
+        "Flash ADV",
+        "Monitor ADV"
+      ],
       "group": "build",
       "problemMatcher": []
     },
     {
       "label": "Clean+Build+Flash+Monitor K132",
       "dependsOrder": "sequence",
-      "dependsOn": ["Clean K132", "Build K132", "Flash K132", "Monitor K132"],
+      "dependsOn": [
+        "Clean K132",
+        "Build K132",
+        "Flash K132",
+        "Monitor K132"
+      ],
       "group": "build",
       "problemMatcher": []
     },
     {
       "label": "Build BOTH (ADV + K132)",
       "dependsOrder": "sequence",
-      "dependsOn": ["Build ADV", "Build K132"],
+      "dependsOn": [
+        "Build ADV",
+        "Build K132"
+      ],
       "group": "build",
       "problemMatcher": []
     },
     {
       "label": "Clean BOTH (ADV + K132)",
       "dependsOrder": "sequence",
-      "dependsOn": ["Clean ADV", "Clean K132"],
+      "dependsOn": [
+        "Clean ADV",
+        "Clean K132"
+      ],
       "group": "build",
       "problemMatcher": []
     }

@@ -190,6 +190,14 @@ static void on_key(screen_t *self, key_code_t key)
                     ui_draw_menu_item(start_row + old_row, old_label, false, false, false);
                     ui_draw_menu_item(start_row + new_row, new_label, true, false, false);
                 }
+            } else if (data->count > 0) {
+                data->selected_index = data->count - 1;
+                if (data->count > VISIBLE_ITEMS) {
+                    data->scroll_offset = data->count - VISIBLE_ITEMS;
+                } else {
+                    data->scroll_offset = 0;
+                }
+                draw_screen(self);
             }
             break;
             
@@ -228,6 +236,10 @@ static void on_key(screen_t *self, key_code_t key)
                     ui_draw_menu_item(start_row + old_row, old_label, false, false, false);
                     ui_draw_menu_item(start_row + new_row, new_label, true, false, false);
                 }
+            } else if (data->count > 0) {
+                data->selected_index = 0;
+                data->scroll_offset = 0;
+                draw_screen(self);
             }
             break;
             

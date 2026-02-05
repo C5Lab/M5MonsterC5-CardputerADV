@@ -22,7 +22,7 @@
 #include "buzzer.h"
 #include "text_ui.h"
 
-#define JANOS_ADV_VERSION "1.5.0"
+#define JANOS_ADV_VERSION "1.5.2"
 
 // Screen timeout configuration
 #define SCREEN_TIMEOUT_MS  30000  // 30 seconds
@@ -236,14 +236,23 @@ void app_main(void)
                             "Some functions limited");
             display_flush();
 
-            // Block until ESC, then continue
+            // Block UI input until ESC (no arrow/menu handling under popup)
+            keyboard_set_callback_enabled(false);
             while (true) {
                 keyboard_process();
-                if (keyboard_get_key() == KEY_ESC) {
+                bool esc_pressed = false;
+                key_code_t key = KEY_NONE;
+                while ((key = keyboard_get_key()) != KEY_NONE) {
+                    if (key == KEY_ESC) {
+                        esc_pressed = true;
+                    }
+                }
+                if (esc_pressed) {
                     break;
                 }
-                vTaskDelay(pdMS_TO_TICKS(100));
+                vTaskDelay(pdMS_TO_TICKS(20));
             }
+            keyboard_set_callback_enabled(true);
             ui_clear();
             screen_manager_redraw();
             board_sd_popup_shown = true;

@@ -251,6 +251,9 @@ static void on_key(screen_t *self, key_code_t key)
                     data->selected_index--;
                     redraw_two_rows(data, old_idx, data->selected_index);
                 }
+            } else if (data->count > 0) {
+                data->focus_on_next = true;
+                draw_screen(self);
             }
             break;
             
@@ -275,6 +278,11 @@ static void on_key(screen_t *self, key_code_t key)
                     data->focus_on_next = true;
                     draw_screen(self);  // Full redraw when switching focus
                 }
+            } else if (data->count > 0) {
+                data->focus_on_next = false;
+                data->selected_index = 0;
+                data->scroll_offset = 0;
+                draw_screen(self);
             }
             break;
             

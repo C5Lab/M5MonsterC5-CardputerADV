@@ -39,6 +39,7 @@ typedef struct {
     password_state_t state;
     bool needs_redraw;
     int timeout_ticks;
+    int network_id;
     screen_t *self;
 } rogue_ap_password_data_t;
 
@@ -138,6 +139,7 @@ static void proceed_to_html(rogue_ap_password_data_t *data)
         params->ssid[sizeof(params->ssid) - 1] = '\0';
         strncpy(params->password, data->password, sizeof(params->password) - 1);
         params->password[sizeof(params->password) - 1] = '\0';
+        params->network_id = data->network_id;
         
         ESP_LOGI(TAG, "Proceeding to HTML select with SSID=%s, password=%s", 
                  params->ssid, params->password);
@@ -293,6 +295,7 @@ screen_t* rogue_ap_password_screen_create(void *params)
     }
     
     strncpy(data->ssid, pass_params->ssid, sizeof(data->ssid) - 1);
+    data->network_id = pass_params->network_id;
     data->state = STATE_LOADING;
     data->self = screen;
     free(pass_params);

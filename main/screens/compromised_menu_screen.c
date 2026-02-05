@@ -69,6 +69,10 @@ static void on_key(screen_t *self, key_code_t key)
                 int old = data->selected_index;
                 data->selected_index--;
                 redraw_selection(data, old, data->selected_index);
+            } else {
+                int old = data->selected_index;
+                data->selected_index = MENU_ITEM_COUNT - 1;
+                redraw_selection(data, old, data->selected_index);
             }
             break;
             
@@ -76,6 +80,10 @@ static void on_key(screen_t *self, key_code_t key)
             if (data->selected_index < MENU_ITEM_COUNT - 1) {
                 int old = data->selected_index;
                 data->selected_index++;
+                redraw_selection(data, old, data->selected_index);
+            } else {
+                int old = data->selected_index;
+                data->selected_index = 0;
                 redraw_selection(data, old, data->selected_index);
             }
             break;

@@ -12,6 +12,7 @@
 typedef struct {
     char ssid[33];
     char password[65];
+    int network_id;
 } rogue_ap_html_params_t;
 
 /**
