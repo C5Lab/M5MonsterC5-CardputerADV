@@ -17,28 +17,25 @@
       "windows": {
         "command": "cmd",
         "args": [
-          "/d",
-          "/c",
-          "${workspaceFolder}\\.vscode\\run_idf.cmd",
-          "${config:idf.currentSetup}",
-          "${config:idf.currentSetup}",
-          "build-adv",
-          "adv",
-          "build"
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv build"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-adv\" \"adv\" \"build\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.espIdfPath}\" \"build-adv\" \"adv\" \"build\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
         ]
       },
       "group": "build",
@@ -60,28 +57,25 @@
       "windows": {
         "command": "cmd",
         "args": [
-          "/d",
-          "/c",
-          "${workspaceFolder}\\.vscode\\run_idf.cmd",
-          "${config:idf.currentSetup}",
-          "${config:idf.currentSetup}",
-          "build-k132",
-          "k132",
-          "build"
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 build"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-k132\" \"k132\" \"build\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-k132\" \"k132\" \"build\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
         ]
       },
       "group": "build",
@@ -91,43 +85,30 @@
       "label": "Flash ADV",
       "type": "shell",
       "command": "idf.py",
-      "args": [
-        "-B",
-        "build-adv",
-        "-DBOARD=adv",
-        "-p",
-        "${config:idf.port}",
-        "flash"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "args": ["-B", "build-adv", "-DBOARD=adv", "-p", "${config:idf.port}", "flash"],
+      "options": { "cwd": "${workspaceFolder}" },
       "windows": {
         "command": "cmd",
         "args": [
-          "/d",
-          "/c",
-          "${workspaceFolder}\\.vscode\\run_idf.cmd",
-          "${config:idf.currentSetup}",
-          "${config:idf.currentSetup}",
-          "build-adv",
-          "adv",
-          "flash",
-          "${config:idf.portWin}"
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} flash"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-adv\" \"adv\" \"flash\" \"${config:idf.port}\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} flash"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.espIdfPath}\" \"build-adv\" \"adv\" \"flash\" \"${config:idf.port}\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} flash"
         ]
       },
       "group": "build",
@@ -137,43 +118,30 @@
       "label": "Flash K132",
       "type": "shell",
       "command": "idf.py",
-      "args": [
-        "-B",
-        "build-k132",
-        "-DBOARD=k132",
-        "-p",
-        "${config:idf.port}",
-        "flash"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "args": ["-B", "build-k132", "-DBOARD=k132", "-p", "${config:idf.port}", "flash"],
+      "options": { "cwd": "${workspaceFolder}" },
       "windows": {
         "command": "cmd",
         "args": [
-          "/d",
-          "/c",
-          "${workspaceFolder}\\.vscode\\run_idf.cmd",
-          "${config:idf.currentSetup}",
-          "${config:idf.currentSetup}",
-          "build-k132",
-          "k132",
-          "flash",
-          "${config:idf.portWin}"
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} flash"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-k132\" \"k132\" \"flash\" \"${config:idf.port}\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} flash"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-k132\" \"k132\" \"flash\" \"${config:idf.port}\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} flash"
         ]
       },
       "group": "build",
@@ -198,28 +166,22 @@
           "-NoProfile",
           "-ExecutionPolicy",
           "Bypass",
-          "-File",
-          "${workspaceFolder}\\.vscode\\run_idf.ps1",
-          "-BuildDir",
-          "build-adv",
-          "-Board",
-          "adv",
-          "-Action",
-          "fullclean"
+          "-Command",
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv fullclean"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-adv\" \"adv\" \"fullclean\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-adv\" \"adv\" \"fullclean\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
         ]
       },
       "group": "build",
@@ -255,28 +217,22 @@
           "-NoProfile",
           "-ExecutionPolicy",
           "Bypass",
-          "-File",
-          "${workspaceFolder}\\.vscode\\run_idf.ps1",
-          "-BuildDir",
-          "build-k132",
-          "-Board",
-          "k132",
-          "-Action",
-          "fullclean"
+          "-Command",
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 fullclean"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-k132\" \"k132\" \"fullclean\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-k132\" \"k132\" \"fullclean\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
         ]
       },
       "group": "build",
@@ -297,43 +253,30 @@
       "label": "Monitor ADV",
       "type": "shell",
       "command": "idf.py",
-      "args": [
-        "-B",
-        "build-adv",
-        "-DBOARD=adv",
-        "-p",
-        "${config:idf.port}",
-        "monitor"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "args": ["-B", "build-adv", "-DBOARD=adv", "-p", "${config:idf.port}", "monitor"],
+      "options": { "cwd": "${workspaceFolder}" },
       "windows": {
         "command": "cmd",
         "args": [
-          "/d",
-          "/c",
-          "${workspaceFolder}\\.vscode\\run_idf.cmd",
-          "${config:idf.currentSetup}",
-          "${config:idf.currentSetup}",
-          "build-adv",
-          "adv",
-          "monitor",
-          "${config:idf.portWin}"
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} monitor"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-adv\" \"adv\" \"monitor\" \"${config:idf.port}\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} monitor"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.espIdfPath}\" \"build-adv\" \"adv\" \"monitor\" \"${config:idf.port}\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} monitor"
         ]
       },
       "group": "build",
@@ -343,43 +286,30 @@
       "label": "Monitor K132",
       "type": "shell",
       "command": "idf.py",
-      "args": [
-        "-B",
-        "build-k132",
-        "-DBOARD=k132",
-        "-p",
-        "${config:idf.port}",
-        "monitor"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "args": ["-B", "build-k132", "-DBOARD=k132", "-p", "${config:idf.port}", "monitor"],
+      "options": { "cwd": "${workspaceFolder}" },
       "windows": {
         "command": "cmd",
         "args": [
-          "/d",
-          "/c",
-          "${workspaceFolder}\\.vscode\\run_idf.cmd",
-          "${config:idf.currentSetup}",
-          "${config:idf.currentSetup}",
-          "build-k132",
-          "k132",
-          "monitor",
-          "${config:idf.portWin}"
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "& \"${config:idf.espIdfPath}\\\\export.ps1\"; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} monitor"
         ]
       },
       "linux": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-k132\" \"k132\" \"monitor\" \"${config:idf.port}\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} monitor"
         ]
       },
       "osx": {
         "command": "bash",
         "args": [
           "-lc",
-          "bash \"${workspaceFolder}/.vscode/run_idf.sh\" \"${config:idf.espIdfPath}\" \"${config:idf.currentSetup}\" \"build-k132\" \"k132\" \"monitor\" \"${config:idf.port}\""
+          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} monitor"
         ]
       },
       "group": "build",
@@ -388,20 +318,14 @@
     {
       "label": "Flash+Monitor ADV",
       "dependsOrder": "sequence",
-      "dependsOn": [
-        "Flash ADV",
-        "Monitor ADV"
-      ],
+      "dependsOn": ["Flash ADV", "Monitor ADV"],
       "group": "build",
       "problemMatcher": []
     },
     {
       "label": "Flash+Monitor K132",
       "dependsOrder": "sequence",
-      "dependsOn": [
-        "Flash K132",
-        "Monitor K132"
-      ],
+      "dependsOn": ["Flash K132", "Monitor K132"],
       "group": "build",
       "problemMatcher": []
     },

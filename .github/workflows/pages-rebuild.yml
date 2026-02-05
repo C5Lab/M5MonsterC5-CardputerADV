@@ -1,0 +1,110 @@
+name: Rebuild GitHub Pages (Web Flasher)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional release tag (e.g. v1.2.3). Leave empty to use latest release."
+        required: false
+
+jobs:
+  pages:
+    name: Rebuild Pages
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+        with:
+          enablement: true
+
+      - name: Resolve release tag
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          fi
+          if [ -z "$TAG" ]; then
+            echo "No release tag available" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Using tag: $TAG"
+
+      - name: Download release assets
+        id: download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.tag }}"
+          rm -rf docs/firmware
+          mkdir -p docs/firmware/tmp
+
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir docs/firmware/tmp \
+            --pattern "bootloader-adv.bin" \
+            --pattern "partition-table-adv.bin" \
+            --pattern "M5MonsterC5-CardputerADV-adv*.bin" \
+            --pattern "bootloader-k132.bin" \
+            --pattern "partition-table-k132.bin" \
+            --pattern "M5MonsterC5-CardputerADV-k132*.bin"
+
+          mkdir -p docs/firmware/adv docs/firmware/k132
+
+          cp docs/firmware/tmp/bootloader-adv.bin docs/firmware/adv/bootloader.bin
+          cp docs/firmware/tmp/partition-table-adv.bin docs/firmware/adv/partition-table.bin
+          cp docs/firmware/tmp/M5MonsterC5-CardputerADV-adv.bin docs/firmware/adv/M5MonsterC5-CardputerADV.bin
+
+          cp docs/firmware/tmp/bootloader-k132.bin docs/firmware/k132/bootloader.bin
+          cp docs/firmware/tmp/partition-table-k132.bin docs/firmware/k132/partition-table.bin
+          cp docs/firmware/tmp/M5MonsterC5-CardputerADV-k132.bin docs/firmware/k132/M5MonsterC5-CardputerADV.bin
+
+          ls -lh docs/firmware/adv docs/firmware/k132
+
+          for board in adv k132; do
+            for f in bootloader.bin partition-table.bin M5MonsterC5-CardputerADV.bin; do
+              if [ ! -f "docs/firmware/${board}/$f" ]; then
+                echo "Missing $f for ${board} in release assets for tag ${TAG}" >&2
+                exit 1
+              fi
+            done
+          done
+
+          fw_version=$(ls docs/firmware/tmp/M5MonsterC5-CardputerADV-adv-*.bin 2>/dev/null | head -n1 | xargs -n1 basename | sed -E 's/^M5MonsterC5-CardputerADV-adv-([^.]*)\.bin$/\1/')
+          if [ -z "$fw_version" ]; then
+            fw_version="${TAG}"
+          fi
+          echo "fw_version=$fw_version" >> "$GITHUB_OUTPUT"
+
+      - name: Build manifest.json
+        env:
+          FW_VERSION: ${{ steps.download.outputs.fw_version }}
+          BUILD_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python -c "import os, json; from pathlib import Path; version=os.getenv('FW_VERSION') or os.getenv('BUILD_TAG'); build=os.getenv('BUILD_TAG','manual'); base={'version':version,'build':build,'chipFamily':'ESP32-S3'}; adv={'name':'M5MonsterC5-CardputerADV ESP32-S3 (ADV)','parts':[{'path':'firmware/adv/bootloader.bin','offset':0},{'path':'firmware/adv/partition-table.bin','offset':32768},{'path':'firmware/adv/M5MonsterC5-CardputerADV.bin','offset':65536}]}; k132={'name':'M5MonsterC5-CardputerADV ESP32-S3 (K132)','parts':[{'path':'firmware/k132/bootloader.bin','offset':0},{'path':'firmware/k132/partition-table.bin','offset':32768},{'path':'firmware/k132/M5MonsterC5-CardputerADV.bin','offset':65536}]}; Path('docs/manifest.json').write_text(json.dumps({**base, **adv}, indent=2)); Path('docs/manifest_k132.json').write_text(json.dumps({**base, **k132}, indent=2))"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
