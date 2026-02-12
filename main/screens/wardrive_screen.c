@@ -32,6 +32,7 @@ typedef enum {
 typedef struct {
     wardrive_state_t state;
     char last_log_line[MAX_LOG_LINE];
+    char last_ssid[64];
     char lat[16];  
     char lon[16];  
     bool needs_redraw;
@@ -65,6 +66,24 @@ static void uart_line_callback(const char *line, void *user_data)
 {
     wardrive_data_t *data = (wardrive_data_t *)user_data;
     if (!data) return;
+    
+    // Check for network CSV lines (MAC,SSID,[AUTH],...) to extract last SSID
+    // MAC format: XX:XX:XX:XX:XX:XX (17 chars) followed by comma
+    if (strlen(line) > 18 && line[2] == ':' && line[5] == ':' && 
+        line[8] == ':' && line[11] == ':' && line[14] == ':' && line[17] == ',') {
+        // Extract SSID between first and second comma
+        const char *ssid_start = line + 18;  // right after "MAC,"
+        const char *ssid_end = strchr(ssid_start, ',');
+        if (ssid_end && ssid_end > ssid_start) {
+            size_t ssid_len = ssid_end - ssid_start;
+            if (ssid_len < sizeof(data->last_ssid)) {
+                strncpy(data->last_ssid, ssid_start, ssid_len);
+                data->last_ssid[ssid_len] = '\0';
+                data->needs_redraw = true;
+            }
+        }
+        // Don't return - still process the line for other patterns
+    }
     
     // Check for GPS fix
     if (strstr(line, "GPS fix obtained") != NULL) {
@@ -157,18 +176,26 @@ static void draw_screen(screen_t *self)
         }
         row += 2;
         
-        // Show GPS coordinates
-        if (data->lat[0] != '\0' && data->lon[0] != '\0') {
-            char gps_line[48];
-            snprintf(gps_line, sizeof(gps_line), "GPS: %s, %s", data->lat, data->lon);
-            ui_print(0, row, gps_line, UI_COLOR_DIMMED);
+        // Show last SSID
+        if (data->last_ssid[0] != '\0') {
+            char ssid_line[80];
+            snprintf(ssid_line, sizeof(ssid_line), "Last SSID: %s", data->last_ssid);
+            ui_print(0, row, ssid_line, UI_COLOR_TEXT);
         } else {
-            ui_print(0, row, "GPS: Waiting...", UI_COLOR_DIMMED);
+            ui_print(0, row, "Last SSID: -", UI_COLOR_DIMMED);
         }
         row += 2;
         
-        // Show scanning indicator
-        ui_print(0, row, "Wardrive in progress...", UI_COLOR_HIGHLIGHT);
+        // Show GPS coordinates (truncated to 5 decimal places to fit screen)
+        if (data->lat[0] != '\0' && data->lon[0] != '\0') {
+            char gps_line[48];
+            double lat_val = strtod(data->lat, NULL);
+            double lon_val = strtod(data->lon, NULL);
+            snprintf(gps_line, sizeof(gps_line), "Last GPS: %.5f, %.5f", lat_val, lon_val);
+            ui_print(0, row, gps_line, UI_COLOR_DIMMED);
+        } else {
+            ui_print(0, row, "Last GPS: Waiting...", UI_COLOR_DIMMED);
+        }
     }
     
     // Draw status bar
@@ -228,6 +255,7 @@ screen_t* wardrive_screen_create(void *params)
     data->self = screen;
     data->state = STATE_WAITING_GPS;
     data->last_log_line[0] = '\0';
+    data->last_ssid[0] = '\0';
     data->lat[0] = '\0';
     data->lon[0] = '\0';
     
