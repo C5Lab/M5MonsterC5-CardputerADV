@@ -284,8 +284,8 @@ screen_t* wardrive_screen_create(void *params)
     draw_screen(screen);
     
     // Send gps_set m5 command first
-    uart_send_command("gps_set m5");
-    ESP_LOGI(TAG, "Sent gps_set m5, waiting 3 seconds...");
+    //uart_send_command("gps_set m5");
+    //ESP_LOGI(TAG, "Sent gps_set m5, waiting 3 seconds...");
     
     // Wait 3 seconds for GPS to initialize
     vTaskDelay(pdMS_TO_TICKS(3000));
