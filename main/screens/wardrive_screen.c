@@ -16,25 +16,25 @@
 
 static const char *TAG = "WARDRIVE";
 
-// Maximum log line length
-#define MAX_LOG_LINE 128
-
 // Refresh timer interval (200ms)
 #define REFRESH_INTERVAL_US 200000
 
 // Wardrive states
 typedef enum {
     STATE_WAITING_GPS,
-    STATE_RUNNING
+    STATE_RUNNING,
+    STATE_GPS_LOST
 } wardrive_state_t;
 
 // Screen user data
 typedef struct {
     wardrive_state_t state;
-    char last_log_line[MAX_LOG_LINE];
     char last_ssid[64];
     char lat[16];  
     char lon[16];  
+    int gps_wait_elapsed;
+    int gps_wait_timeout;
+    int unique_networks;
     bool needs_redraw;
     esp_timer_handle_t refresh_timer;
     screen_t *self;
@@ -56,98 +56,162 @@ static void refresh_timer_callback(void *arg)
 }
 
 /**
- * @brief UART line callback for parsing wardrive output
- * Patterns:
- * - "GPS fix obtained" -> transition to STATE_RUNNING
- * - "Logged N networks to [path]" -> store as last_log_line
- * - "GPS: Lat=... Lon=..." -> store coordinates
+ * @brief Helper to parse "Lat=VALUE Lon=VALUE" or "Lat=VALUE Lon=VALUE." from a string.
+ *        Handles both space-separated and end-of-line/period-terminated Lon values.
+ */
+static void parse_lat_lon(const char *str, wardrive_data_t *data)
+{
+    const char *lat_marker = "Lat=";
+    const char *lat_ptr = strstr(str, lat_marker);
+    if (!lat_ptr) return;
+    
+    const char *lat_start = lat_ptr + strlen(lat_marker);
+    const char *lat_end = strchr(lat_start, ' ');
+    if (!lat_end) return;
+    
+    size_t lat_len = lat_end - lat_start;
+    if (lat_len < sizeof(data->lat)) {
+        strncpy(data->lat, lat_start, lat_len);
+        data->lat[lat_len] = '\0';
+    }
+    
+    const char *lon_marker = "Lon=";
+    const char *lon_ptr = strstr(lat_end, lon_marker);
+    if (!lon_ptr) return;
+    
+    const char *lon_start = lon_ptr + strlen(lon_marker);
+    size_t lon_len = 0;
+    const char *lon_end = lon_start;
+    while (*lon_end && *lon_end != ' ' && *lon_end != '\n' && *lon_end != '\r') {
+        if ((*lon_end >= '0' && *lon_end <= '9') || *lon_end == '-') {
+            lon_end++;
+        } else if (*lon_end == '.') {
+            if (*(lon_end + 1) >= '0' && *(lon_end + 1) <= '9') {
+                lon_end++;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    lon_len = lon_end - lon_start;
+    if (lon_len > 0 && lon_len < sizeof(data->lon)) {
+        strncpy(data->lon, lon_start, lon_len);
+        data->lon[lon_len] = '\0';
+    }
+    
+    ESP_LOGI(TAG, "GPS update: %s, %s", data->lat, data->lon);
+}
+
+/**
+ * @brief UART line callback for parsing wardrive promisc output
  */
 static void uart_line_callback(const char *line, void *user_data)
 {
     wardrive_data_t *data = (wardrive_data_t *)user_data;
     if (!data) return;
     
-    // Check for network CSV lines (MAC,SSID,[AUTH],...) to extract last SSID
-    // MAC format: XX:XX:XX:XX:XX:XX (17 chars) followed by comma
+    // --- Network CSV lines: MAC,SSID,[AUTH],date,ch,rssi,lat,lon,alt,acc,WIFI ---
     if (strlen(line) > 18 && line[2] == ':' && line[5] == ':' && 
         line[8] == ':' && line[11] == ':' && line[14] == ':' && line[17] == ',') {
-        // Extract SSID between first and second comma
-        const char *ssid_start = line + 18;  // right after "MAC,"
+        const char *ssid_start = line + 18;
         const char *ssid_end = strchr(ssid_start, ',');
         if (ssid_end && ssid_end > ssid_start) {
             size_t ssid_len = ssid_end - ssid_start;
             if (ssid_len < sizeof(data->last_ssid)) {
                 strncpy(data->last_ssid, ssid_start, ssid_len);
                 data->last_ssid[ssid_len] = '\0';
-                data->needs_redraw = true;
             }
         }
-        // Don't return - still process the line for other patterns
-    }
-    
-    // Check for GPS fix
-    if (strstr(line, "GPS fix obtained") != NULL) {
-        ESP_LOGI(TAG, "GPS fix obtained!");
-        data->state = STATE_RUNNING;
+        // Extract lat/lon from CSV columns 7 and 8 (0-indexed: 6 and 7)
+        const char *p = line;
+        int comma_count = 0;
+        const char *field_starts[9] = {0};
+        field_starts[0] = p;
+        while (*p) {
+            if (*p == ',') {
+                comma_count++;
+                if (comma_count < 9) {
+                    field_starts[comma_count] = p + 1;
+                }
+            }
+            p++;
+        }
+        // field 6 = lat, field 7 = lon
+        if (comma_count >= 8 && field_starts[6] && field_starts[7]) {
+            const char *lat_s = field_starts[6];
+            const char *lat_e = strchr(lat_s, ',');
+            const char *lon_s = field_starts[7];
+            const char *lon_e = strchr(lon_s, ',');
+            if (lat_e && lon_e) {
+                size_t ll = lat_e - lat_s;
+                size_t lo = lon_e - lon_s;
+                if (ll > 0 && ll < sizeof(data->lat)) {
+                    strncpy(data->lat, lat_s, ll);
+                    data->lat[ll] = '\0';
+                }
+                if (lo > 0 && lo < sizeof(data->lon)) {
+                    strncpy(data->lon, lon_s, lo);
+                    data->lon[lo] = '\0';
+                }
+            }
+        }
+        data->unique_networks++;
         data->needs_redraw = true;
         return;
     }
     
-    // Check for GPS coordinates
-    const char *gps_marker = "GPS: Lat=";
-    const char *gps_found = strstr(line, gps_marker);
-    if (gps_found) {
-        const char *lat_start = gps_found + strlen(gps_marker);
-        const char *lat_end = strchr(lat_start, ' ');
-        if (lat_end) {
-            size_t lat_len = lat_end - lat_start;
-            if (lat_len < sizeof(data->lat)) {
-                strncpy(data->lat, lat_start, lat_len);
-                data->lat[lat_len] = '\0';
+    // --- GPS fix waiting countdown: "Still waiting for GPS fix... (N/M seconds)" ---
+    const char *still_waiting = strstr(line, "Still waiting for GPS fix");
+    if (still_waiting) {
+        const char *paren = strchr(still_waiting, '(');
+        if (paren) {
+            int elapsed = 0, timeout = 0;
+            if (sscanf(paren, "(%d/%d seconds)", &elapsed, &timeout) == 2) {
+                data->gps_wait_elapsed = elapsed;
+                data->gps_wait_timeout = timeout;
             }
-            
-            // Find Lon=
-            const char *lon_marker = "Lon=";
-            const char *lon_start = strstr(lat_end, lon_marker);
-            if (lon_start) {
-                lon_start += strlen(lon_marker);
-                const char *lon_end = strchr(lon_start, ' ');
-                if (lon_end) {
-                    size_t lon_len = lon_end - lon_start;
-                    if (lon_len < sizeof(data->lon)) {
-                        strncpy(data->lon, lon_start, lon_len);
-                        data->lon[lon_len] = '\0';
-                    }
-                }
-            }
-            
-            ESP_LOGI(TAG, "GPS update: %s, %s", data->lat, data->lon);
-            data->needs_redraw = true;
         }
+        data->needs_redraw = true;
         return;
     }
     
-    // Check for "Logged " at start (after any whitespace)
-    const char *logged_marker = "Logged ";
-    const char *found = strstr(line, logged_marker);
+    // --- GPS fix obtained: "GPS fix obtained: Lat=... Lon=..." ---
+    if (strstr(line, "GPS fix obtained") != NULL) {
+        ESP_LOGI(TAG, "GPS fix obtained!");
+        data->state = STATE_RUNNING;
+        parse_lat_lon(line, data);
+        data->needs_redraw = true;
+        return;
+    }
     
-    if (found) {
-        // Make sure it contains "networks to" to confirm it's the right line
-        if (strstr(found, "networks to") != NULL) {
-            // Store the entire log line
-            strncpy(data->last_log_line, found, MAX_LOG_LINE - 1);
-            data->last_log_line[MAX_LOG_LINE - 1] = '\0';
-            
-            // Remove trailing newline/whitespace
-            char *end = data->last_log_line + strlen(data->last_log_line) - 1;
-            while (end > data->last_log_line && (*end == '\n' || *end == '\r' || *end == ' ')) {
-                *end = '\0';
-                end--;
-            }
-            
-            ESP_LOGI(TAG, "Log update: %s", data->last_log_line);
+    // --- GPS fix lost: "GPS fix lost! Pausing wardrive..." ---
+    if (strstr(line, "GPS fix lost") != NULL) {
+        ESP_LOGW(TAG, "GPS fix lost!");
+        data->state = STATE_GPS_LOST;
+        data->needs_redraw = true;
+        return;
+    }
+    
+    // --- GPS fix recovered: "GPS fix recovered: Lat=... Lon=... Resuming wardrive." ---
+    if (strstr(line, "GPS fix recovered") != NULL) {
+        ESP_LOGI(TAG, "GPS fix recovered!");
+        data->state = STATE_RUNNING;
+        parse_lat_lon(line, data);
+        data->needs_redraw = true;
+        return;
+    }
+    
+    // --- Wardrive promisc: N unique networks ---
+    const char *promisc_stat = strstr(line, "Wardrive promisc:");
+    if (promisc_stat) {
+        int n = 0;
+        if (sscanf(promisc_stat, "Wardrive promisc: %d unique networks", &n) == 1) {
+            data->unique_networks = n;
             data->needs_redraw = true;
         }
+        return;
     }
 }
 
@@ -163,20 +227,23 @@ static void draw_screen(screen_t *self)
     int row = 2;
     
     if (data->state == STATE_WAITING_GPS) {
-        // Waiting for GPS fix
-        ui_print(0, row, "Acquiring GPS Fix,", UI_COLOR_HIGHLIGHT);
-        row++;
-        ui_print(0, row, "need clear view of the sky.", UI_COLOR_HIGHLIGHT);
-    } else {
-        // Running - show last log line or scanning message
-        if (data->last_log_line[0] != '\0') {
-            ui_print(0, row, data->last_log_line, UI_COLOR_TEXT);
+        ui_print(0, row, "Acquiring GPS Fix...", UI_COLOR_HIGHLIGHT);
+        row += 2;
+        if (data->gps_wait_timeout > 0) {
+            char wait_line[48];
+            snprintf(wait_line, sizeof(wait_line), "Waiting: %d/%d seconds",
+                     data->gps_wait_elapsed, data->gps_wait_timeout);
+            ui_print(0, row, wait_line, UI_COLOR_DIMMED);
         } else {
-            ui_print(0, row, "Scanning networks...", UI_COLOR_DIMMED);
+            ui_print(0, row, "Need clear view of the sky.", UI_COLOR_DIMMED);
         }
+    } else {
+        // STATE_RUNNING or STATE_GPS_LOST
+        char status_line[48];
+        snprintf(status_line, sizeof(status_line), "Wardriving, %d networks found.", data->unique_networks);
+        ui_print(0, row, status_line, UI_COLOR_TEXT);
         row += 2;
         
-        // Show last SSID
         if (data->last_ssid[0] != '\0') {
             char ssid_line[80];
             snprintf(ssid_line, sizeof(ssid_line), "Last SSID: %s", data->last_ssid);
@@ -186,8 +253,9 @@ static void draw_screen(screen_t *self)
         }
         row += 2;
         
-        // Show GPS coordinates (truncated to 5 decimal places to fit screen)
-        if (data->lat[0] != '\0' && data->lon[0] != '\0') {
+        if (data->state == STATE_GPS_LOST) {
+            ui_print(0, row, "GPS fix lost! Pausing...", UI_COLOR_HIGHLIGHT);
+        } else if (data->lat[0] != '\0' && data->lon[0] != '\0') {
             char gps_line[48];
             double lat_val = strtod(data->lat, NULL);
             double lon_val = strtod(data->lon, NULL);
@@ -254,7 +322,6 @@ screen_t* wardrive_screen_create(void *params)
     
     data->self = screen;
     data->state = STATE_WAITING_GPS;
-    data->last_log_line[0] = '\0';
     data->last_ssid[0] = '\0';
     data->lat[0] = '\0';
     data->lon[0] = '\0';
@@ -291,7 +358,7 @@ screen_t* wardrive_screen_create(void *params)
     vTaskDelay(pdMS_TO_TICKS(3000));
     
     // Now send start_wardrive command
-    uart_send_command("start_wardrive");
+    uart_send_command("start_wardrive_promisc");
     buzzer_beep_attack();
     
     ESP_LOGI(TAG, "Wardrive screen created");
