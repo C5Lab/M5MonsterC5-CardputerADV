@@ -17,6 +17,7 @@ static const char *TAG = "SETTINGS";
 #define NVS_KEY_RED_TEAM    "red_team"
 #define NVS_KEY_SCR_TIMEOUT "scr_tmout"
 #define NVS_KEY_SCR_BRIGHT  "scr_bright"
+#define NVS_KEY_GPS_TYPE    "gps_type"
 
 // Cached values
 static int uart_tx_pin = DEFAULT_UART_TX_PIN;
@@ -24,6 +25,7 @@ static int uart_rx_pin = DEFAULT_UART_RX_PIN;
 static bool red_team_enabled = false;  // Default: disabled
 static uint32_t screen_timeout_ms = DEFAULT_SCREEN_TIMEOUT_MS;
 static uint8_t screen_brightness = DEFAULT_SCREEN_BRIGHTNESS;
+static gps_type_t gps_type = GPS_TYPE_ATGM;  // Default: ATGM
 
 // Reserved GPIO pins that should not be used (ESP32-S3 specific)
 // These include strapping pins, flash/PSRAM pins, USB pins, etc.
@@ -121,6 +123,18 @@ esp_err_t settings_init(void)
                 screen_brightness = bright_val;
             }
             ESP_LOGI(TAG, "Loaded screen brightness: %d%%", screen_brightness);
+        }
+        
+        uint8_t gps_val = 0;
+        if (nvs_get_u8(handle, NVS_KEY_GPS_TYPE, &gps_val) == ESP_OK) {
+            // Migration: old GPS_TYPE_EXTERNAL(2) removed, old GPS_TYPE_CAP(3) -> new GPS_TYPE_CAP(2)
+            if (gps_val == 3) gps_val = GPS_TYPE_CAP;
+            if (gps_val <= GPS_TYPE_CAP) {
+                gps_type = (gps_type_t)gps_val;
+            } else {
+                gps_type = GPS_TYPE_ATGM;
+            }
+            ESP_LOGI(TAG, "Loaded GPS type: %d", gps_type);
         }
         
         nvs_close(handle);
@@ -309,5 +323,44 @@ esp_err_t settings_set_screen_brightness(uint8_t brightness)
     screen_brightness = brightness;
     
     ESP_LOGI(TAG, "Screen brightness saved: %d%%", brightness);
+    return ESP_OK;
+}
+
+gps_type_t settings_get_gps_type(void)
+{
+    return gps_type;
+}
+
+esp_err_t settings_set_gps_type(gps_type_t type)
+{
+    if (type > GPS_TYPE_CAP) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS for writing: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    ret = nvs_set_u8(handle, NVS_KEY_GPS_TYPE, (uint8_t)type);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write GPS type: %s", esp_err_to_name(ret));
+        nvs_close(handle);
+        return ret;
+    }
+    
+    ret = nvs_commit(handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to commit NVS: %s", esp_err_to_name(ret));
+        nvs_close(handle);
+        return ret;
+    }
+    
+    nvs_close(handle);
+    gps_type = type;
+    
+    ESP_LOGI(TAG, "GPS type saved: %d", type);
     return ESP_OK;
 }

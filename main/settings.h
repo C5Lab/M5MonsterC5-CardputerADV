@@ -94,6 +94,26 @@ uint8_t settings_get_screen_brightness(void);
  */
 esp_err_t settings_set_screen_brightness(uint8_t brightness);
 
+// GPS module types
+typedef enum {
+    GPS_TYPE_ATGM = 0,
+    GPS_TYPE_M5 = 1,
+    GPS_TYPE_CAP = 2,
+} gps_type_t;
+
+/**
+ * @brief Get selected GPS module type
+ * @return GPS module type
+ */
+gps_type_t settings_get_gps_type(void);
+
+/**
+ * @brief Set GPS module type
+ * @param type GPS module type
+ * @return ESP_OK on success
+ */
+esp_err_t settings_set_gps_type(gps_type_t type);
+
 #endif // SETTINGS_H
 
 
