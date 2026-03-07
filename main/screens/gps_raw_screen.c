@@ -7,6 +7,8 @@
 #include "uart_handler.h"
 #include "text_ui.h"
 #include "keyboard.h"
+#include "settings.h"
+#include "cap_gps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "font8x16.h"
@@ -36,12 +38,15 @@ typedef struct {
     bool fix;
     char lat[COORD_LEN];
     char lon[COORD_LEN];
+    char alt[COORD_LEN];
     char time_str[TIME_LEN];
     char pending_nmea[128];
     bool pending_active;
     int64_t last_gps_us;
     gps_status_t last_status;
     bool needs_redraw;
+    bool is_cap_gps;
+    bool cap_inited;
 } gps_raw_data_t;
 
 static void draw_screen(screen_t *self);
@@ -80,6 +85,24 @@ static void format_time(char *out, size_t out_size, const char *t)
     snprintf(out, out_size, "%s:%s:%s", hh, mm, ss);
 }
 
+/**
+ * @brief Convert NMEA coordinate (DDMM.MMMM) to decimal degrees
+ */
+static double nmea_coord_to_decimal(const char *coord, char hemisphere)
+{
+    if (!coord || !coord[0]) return 0.0;
+
+    double raw = strtod(coord, NULL);
+    int degrees = (int)(raw / 100.0);
+    double minutes = raw - (degrees * 100.0);
+    double decimal = degrees + (minutes / 60.0);
+
+    if (hemisphere == 'S' || hemisphere == 'W') {
+        decimal = -decimal;
+    }
+    return decimal;
+}
+
 static void parse_gga(gps_raw_data_t *data, const char *nmea)
 {
     char buf[128];
@@ -96,6 +119,7 @@ static void parse_gga(gps_raw_data_t *data, const char *nmea)
     char ew[2] = {0};
     int fix_quality = -1;
     int sats = -1;
+    char alt[16] = {0};
 
     while (tok) {
         switch (field) {
@@ -120,6 +144,9 @@ static void parse_gga(gps_raw_data_t *data, const char *nmea)
             case 7:
                 sats = atoi(tok);
                 break;
+            case 9:
+                snprintf(alt, sizeof(alt), "%s", tok);
+                break;
             default:
                 break;
         }
@@ -132,10 +159,15 @@ static void parse_gga(gps_raw_data_t *data, const char *nmea)
     }
 
     if (lat[0] && ns[0]) {
-        snprintf(data->lat, sizeof(data->lat), "%s %s", lat, ns);
+        double dec = nmea_coord_to_decimal(lat, ns[0]);
+        snprintf(data->lat, sizeof(data->lat), "%.7f", dec);
     }
     if (lon[0] && ew[0]) {
-        snprintf(data->lon, sizeof(data->lon), "%s %s", lon, ew);
+        double dec = nmea_coord_to_decimal(lon, ew[0]);
+        snprintf(data->lon, sizeof(data->lon), "%.7f", dec);
+    }
+    if (alt[0]) {
+        snprintf(data->alt, sizeof(data->alt), "%sm", alt);
     }
 
     if (sats >= 0) {
@@ -194,10 +226,12 @@ static void parse_rmc(gps_raw_data_t *data, const char *nmea)
     }
 
     if (lat[0] && ns[0]) {
-        snprintf(data->lat, sizeof(data->lat), "%s %s", lat, ns);
+        double dec = nmea_coord_to_decimal(lat, ns[0]);
+        snprintf(data->lat, sizeof(data->lat), "%.7f", dec);
     }
     if (lon[0] && ew[0]) {
-        snprintf(data->lon, sizeof(data->lon), "%s %s", lon, ew);
+        double dec = nmea_coord_to_decimal(lon, ew[0]);
+        snprintf(data->lon, sizeof(data->lon), "%.7f", dec);
     }
 
     if (status == 'A' || status == 'V') {
@@ -219,6 +253,13 @@ static void handle_nmea_line(gps_raw_data_t *data, const char *line)
 
 static gps_status_t compute_status(gps_raw_data_t *data)
 {
+    if (data->is_cap_gps) {
+        if (!data->cap_inited) return GPS_STATUS_NO_GPS;
+        int sats = cap_gps_get_satellites();
+        if (sats < 0) return GPS_STATUS_NO_GPS;
+        return cap_gps_has_fix() ? GPS_STATUS_FIX : GPS_STATUS_WAITING;
+    }
+
     int64_t now = esp_timer_get_time();
     if (data->last_gps_us == 0 || (now - data->last_gps_us) > GPS_NO_DATA_TIMEOUT_US) {
         return GPS_STATUS_NO_GPS;
@@ -283,6 +324,21 @@ static void on_tick(screen_t *self)
 {
     gps_raw_data_t *data = (gps_raw_data_t *)self->user_data;
 
+    // CAP GPS: poll position from driver
+    if (data->is_cap_gps && data->cap_inited) {
+        data->sat_count = cap_gps_get_satellites();
+        data->fix = cap_gps_has_fix();
+        if (data->fix) {
+            double lat, lon, alt, hdop;
+            if (cap_gps_get_position(&lat, &lon, &alt, &hdop)) {
+                snprintf(data->lat, sizeof(data->lat), "%.7f", lat);
+                snprintf(data->lon, sizeof(data->lon), "%.7f", lon);
+                snprintf(data->alt, sizeof(data->alt), "%.1fm", alt);
+            }
+        }
+        data->needs_redraw = true;
+    }
+
     gps_status_t status = compute_status(data);
     if (status != data->last_status) {
         data->last_status = status;
@@ -302,7 +358,8 @@ static void draw_screen(screen_t *self)
     ui_clear();
 
     // Draw title
-    ui_draw_title("GPS Read");
+    const char *title = data->is_cap_gps ? "CAP GPS" : "GPS Read";
+    ui_draw_title(title);
 
     gps_status_t status = compute_status(data);
 
@@ -327,11 +384,16 @@ static void draw_screen(screen_t *self)
     }
 
     if (status == GPS_STATUS_FIX && data->lat[0] && data->lon[0]) {
-        ui_print(0, 4, "Position:", UI_COLOR_TEXT);
-
-        char pos_line[64];
-        snprintf(pos_line, sizeof(pos_line), "%s %s", data->lat, data->lon);
-        ui_print(0, 5, pos_line, UI_COLOR_TEXT);
+        char lat_line[32], lon_line[32];
+        snprintf(lat_line, sizeof(lat_line), "Lat: %s", data->lat);
+        snprintf(lon_line, sizeof(lon_line), "Lon: %s", data->lon);
+        ui_print(0, 4, lat_line, UI_COLOR_TEXT);
+        ui_print(0, 5, lon_line, UI_COLOR_TEXT);
+        if (data->alt[0]) {
+            char alt_line[32];
+            snprintf(alt_line, sizeof(alt_line), "Alt: %s", data->alt);
+            ui_print(0, 6, alt_line, UI_COLOR_TEXT);
+        }
     }
 
     // Draw status bar
@@ -344,9 +406,14 @@ static void on_key(screen_t *self, key_code_t key)
         case KEY_ESC:
         case KEY_Q:
         case KEY_BACKSPACE:
-            uart_send_command("stop");
+        {
+            gps_raw_data_t *data = (gps_raw_data_t *)self->user_data;
+            if (!data->is_cap_gps) {
+                uart_send_command("stop");
+            }
             screen_manager_pop();
             break;
+        }
 
         default:
             break;
@@ -355,8 +422,16 @@ static void on_key(screen_t *self, key_code_t key)
 
 static void on_destroy(screen_t *self)
 {
-    uart_send_command("stop");
-    uart_clear_line_callback();
+    gps_raw_data_t *data = (gps_raw_data_t *)self->user_data;
+
+    if (data->is_cap_gps) {
+        if (data->cap_inited) {
+            cap_gps_deinit();
+        }
+    } else {
+        uart_send_command("stop");
+        uart_clear_line_callback();
+    }
 
     if (self->user_data) {
         free(self->user_data);
@@ -383,12 +458,15 @@ screen_t* gps_raw_screen_create(void *params)
     data->fix = false;
     data->lat[0] = '\0';
     data->lon[0] = '\0';
+    data->alt[0] = '\0';
     data->time_str[0] = '\0';
     data->pending_nmea[0] = '\0';
     data->pending_active = false;
     data->last_gps_us = 0;
     data->last_status = GPS_STATUS_NO_GPS;
     data->needs_redraw = false;
+    data->is_cap_gps = (settings_get_gps_type() == GPS_TYPE_CAP);
+    data->cap_inited = false;
 
     for (int i = 0; i < RAW_LINE_COUNT; i++) {
         data->raw_lines[i][0] = '\0';
@@ -400,8 +478,18 @@ screen_t* gps_raw_screen_create(void *params)
     screen->on_draw = draw_screen;
     screen->on_tick = on_tick;
 
-    uart_register_line_callback(on_uart_response, screen);
-    uart_send_command("start_gps_raw");
+    if (data->is_cap_gps) {
+        ESP_LOGI(TAG, "CAP GPS mode - reading directly from LoRa CAP");
+        esp_err_t ret = cap_gps_init();
+        if (ret == ESP_OK) {
+            data->cap_inited = true;
+        } else {
+            ESP_LOGE(TAG, "Failed to init CAP GPS: %s", esp_err_to_name(ret));
+        }
+    } else {
+        uart_register_line_callback(on_uart_response, screen);
+        uart_send_command("start_gps_raw");
+    }
 
     draw_screen(screen);
 

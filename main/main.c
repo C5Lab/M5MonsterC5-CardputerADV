@@ -22,7 +22,7 @@
 #include "buzzer.h"
 #include "text_ui.h"
 
-#define JANOS_ADV_VERSION "1.5.7"
+#define JANOS_ADV_VERSION "1.6.0"
 
 // Screen timeout is now configurable via Settings (stored in NVS)
 
@@ -181,6 +181,7 @@ void app_main(void)
     if (board_detected) {
         ESP_LOGI(TAG, "ESP32C5 board detected");
         ESP_LOGI(TAG, "Checking Monster SD card via list_sd...");
+        vTaskDelay(pdMS_TO_TICKS(1000));  // Let JanOS finish SD init before querying
         board_sd_check_pending = true;
         board_sd_check_start_ms = esp_timer_get_time() / 1000;
         uart_send_command("list_sd");

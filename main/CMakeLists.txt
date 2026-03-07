@@ -26,6 +26,7 @@ idf_component_register(
         "drivers/display.c"
         "drivers/screenshot.c"
         "drivers/battery.c"
+        "drivers/cap_gps.c"
         ${BOARD_SRCS}
         "ui/text_ui.c"
         "screens/home_screen.c"

@@ -7,17 +7,23 @@
 #include "uart_handler.h"
 #include "text_ui.h"
 #include "buzzer.h"
+#include "settings.h"
+#include "cap_gps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 static const char *TAG = "WARDRIVE";
 
 // Refresh timer interval (200ms)
 #define REFRESH_INTERVAL_US 200000
+
+// CAP GPS position update interval (~2 seconds = 10 ticks of 200ms)
+#define CAP_GPS_UPDATE_TICKS 10
 
 // Wardrive states
 typedef enum {
@@ -38,18 +44,71 @@ typedef struct {
     bool needs_redraw;
     esp_timer_handle_t refresh_timer;
     screen_t *self;
+    // CAP GPS
+    bool is_cap_gps;
+    bool wardrive_started;
+    int cap_tick_counter;
 } wardrive_data_t;
 
 // Forward declaration
 static void draw_screen(screen_t *self);
 
 /**
- * @brief Timer callback - checks if redraw is needed
+ * @brief Timer callback - checks if redraw is needed and handles CAP GPS updates
  */
 static void refresh_timer_callback(void *arg)
 {
     wardrive_data_t *data = (wardrive_data_t *)arg;
-    if (data && data->needs_redraw && data->self) {
+    if (!data || !data->self) return;
+
+    // CAP GPS position update loop
+    if (data->is_cap_gps) {
+        data->cap_tick_counter++;
+        if (data->cap_tick_counter >= CAP_GPS_UPDATE_TICKS) {
+            data->cap_tick_counter = 0;
+
+            if (cap_gps_has_fix()) {
+                double lat, lon, alt, hdop;
+                if (cap_gps_get_position(&lat, &lon, &alt, &hdop)) {
+                    // Send position to JanOS via UART1
+                    char cmd[96];
+                    snprintf(cmd, sizeof(cmd), "set_gps_position_cap %.7f %.7f %.1f %.1f",
+                             lat, lon, alt, hdop);
+                    uart_send_command(cmd);
+
+                    // Update display coordinates
+                    snprintf(data->lat, sizeof(data->lat), "%.7f", lat);
+                    snprintf(data->lon, sizeof(data->lon), "%.7f", lon);
+
+                    if (data->state == STATE_WAITING_GPS) {
+                        // First fix - start wardrive
+                        ESP_LOGI(TAG, "CAP GPS fix obtained! Starting wardrive...");
+                        uart_send_command("start_wardrive_promisc");
+                        buzzer_beep_attack();
+                        data->wardrive_started = true;
+                        data->state = STATE_RUNNING;
+                    } else if (data->state == STATE_GPS_LOST) {
+                        ESP_LOGI(TAG, "CAP GPS fix recovered!");
+                        data->state = STATE_RUNNING;
+                    }
+                    data->needs_redraw = true;
+                }
+            } else {
+                // No fix
+                if (data->state == STATE_RUNNING) {
+                    ESP_LOGW(TAG, "CAP GPS fix lost!");
+                    uart_send_command("set_gps_position_cap");
+                    data->state = STATE_GPS_LOST;
+                    data->needs_redraw = true;
+                } else if (data->state == STATE_WAITING_GPS) {
+                    // Update satellite count display
+                    data->needs_redraw = true;
+                }
+            }
+        }
+    }
+
+    if (data->needs_redraw) {
         data->needs_redraw = false;
         draw_screen(data->self);
     }
@@ -227,15 +286,28 @@ static void draw_screen(screen_t *self)
     int row = 2;
     
     if (data->state == STATE_WAITING_GPS) {
-        ui_print(0, row, "Acquiring GPS Fix...", UI_COLOR_HIGHLIGHT);
-        row += 2;
-        if (data->gps_wait_timeout > 0) {
-            char wait_line[48];
-            snprintf(wait_line, sizeof(wait_line), "Waiting: %d/%d seconds",
-                     data->gps_wait_elapsed, data->gps_wait_timeout);
-            ui_print(0, row, wait_line, UI_COLOR_DIMMED);
+        if (data->is_cap_gps) {
+            ui_print(0, row, "Acquiring CAP GPS Fix...", UI_COLOR_HIGHLIGHT);
+            row += 2;
+            int sats = cap_gps_get_satellites();
+            if (sats >= 0) {
+                char sats_line[32];
+                snprintf(sats_line, sizeof(sats_line), "Satellites: %d", sats);
+                ui_print(0, row, sats_line, UI_COLOR_DIMMED);
+            } else {
+                ui_print(0, row, "Waiting for CAP data...", UI_COLOR_DIMMED);
+            }
         } else {
-            ui_print(0, row, "Need clear view of the sky.", UI_COLOR_DIMMED);
+            ui_print(0, row, "Acquiring GPS Fix...", UI_COLOR_HIGHLIGHT);
+            row += 2;
+            if (data->gps_wait_timeout > 0) {
+                char wait_line[48];
+                snprintf(wait_line, sizeof(wait_line), "Waiting: %d/%d seconds",
+                         data->gps_wait_elapsed, data->gps_wait_timeout);
+                ui_print(0, row, wait_line, UI_COLOR_DIMMED);
+            } else {
+                ui_print(0, row, "Need clear view of the sky.", UI_COLOR_DIMMED);
+            }
         }
     } else {
         // STATE_RUNNING or STATE_GPS_LOST
@@ -254,7 +326,11 @@ static void draw_screen(screen_t *self)
         row += 2;
         
         if (data->state == STATE_GPS_LOST) {
-            ui_print(0, row, "GPS fix lost! Pausing...", UI_COLOR_HIGHLIGHT);
+            if (data->is_cap_gps) {
+                ui_print(0, row, "CAP GPS fix lost! Pausing...", UI_COLOR_HIGHLIGHT);
+            } else {
+                ui_print(0, row, "GPS fix lost! Pausing...", UI_COLOR_HIGHLIGHT);
+            }
         } else if (data->lat[0] != '\0' && data->lon[0] != '\0') {
             char gps_line[48];
             double lat_val = strtod(data->lat, NULL);
@@ -296,6 +372,11 @@ static void on_destroy(screen_t *self)
         esp_timer_delete(data->refresh_timer);
     }
     
+    // Deinit CAP GPS if active
+    if (data && data->is_cap_gps) {
+        cap_gps_deinit();
+    }
+    
     // Clear UART callback
     uart_clear_line_callback();
     
@@ -325,6 +406,9 @@ screen_t* wardrive_screen_create(void *params)
     data->last_ssid[0] = '\0';
     data->lat[0] = '\0';
     data->lon[0] = '\0';
+    data->is_cap_gps = (settings_get_gps_type() == GPS_TYPE_CAP);
+    data->wardrive_started = false;
+    data->cap_tick_counter = 0;
     
     screen->user_data = data;
     screen->on_key = on_key;
@@ -350,16 +434,21 @@ screen_t* wardrive_screen_create(void *params)
     // Draw initial screen first (shows "Acquiring GPS Fix...")
     draw_screen(screen);
     
-    // Send gps_set m5 command first
-    //uart_send_command("gps_set m5");
-    //ESP_LOGI(TAG, "Sent gps_set m5, waiting 3 seconds...");
-    
-    // Wait 3 seconds for GPS to initialize
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    
-    // Now send start_wardrive command
-    uart_send_command("start_wardrive_promisc");
-    buzzer_beep_attack();
+    if (data->is_cap_gps) {
+        // CAP GPS mode: init UART2 driver, wait for fix in timer callback
+        ESP_LOGI(TAG, "CAP GPS mode - initializing CAP GPS driver...");
+        esp_err_t ret = cap_gps_init();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to init CAP GPS: %s", esp_err_to_name(ret));
+        }
+        // Wardrive will start when fix is obtained (in refresh_timer_callback)
+    } else {
+        // Non-CAP GPS: existing behavior
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        uart_send_command("start_wardrive_promisc");
+        data->wardrive_started = true;
+        buzzer_beep_attack();
+    }
     
     ESP_LOGI(TAG, "Wardrive screen created");
     return screen;
