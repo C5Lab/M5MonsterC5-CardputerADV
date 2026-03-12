@@ -22,7 +22,7 @@
 #include "buzzer.h"
 #include "text_ui.h"
 
-#define JANOS_ADV_VERSION "1.6.0"
+#define JANOS_ADV_VERSION "1.6.1"
 
 // Screen timeout is now configurable via Settings (stored in NVS)
 
