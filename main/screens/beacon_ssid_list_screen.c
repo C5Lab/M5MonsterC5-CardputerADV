@@ -158,7 +158,6 @@ static void on_tick(screen_t *self)
     data->ticks_since_first_draw++;
 
     if (data->ticks_since_first_draw <= 2) {
-        data->needs_redraw = false;
         return;
     }
 
