@@ -7,6 +7,7 @@
 #include "wifi_connect_screen.h"
 #include "arp_hosts_screen.h"
 #include "wpasec_upload_screen.h"
+#include "mitm_sniffer_screen.h"
 #include "settings.h"
 #include "uart_handler.h"
 #include "text_ui.h"
@@ -20,8 +21,9 @@ static const char *TAG = "NET_ATTACKS";
 #define MENU_WIFI      0
 #define MENU_ARP       1
 #define MENU_WPASEC    2
+#define MENU_MITM      3
 
-#define MAX_MENU_ITEMS 3
+#define MAX_MENU_ITEMS 5
 
 // Screen user data
 typedef struct {
@@ -37,6 +39,7 @@ static const char* get_menu_text(int item_id)
         case MENU_WIFI:   return uart_is_wifi_connected() ? "Disconnect from WiFi" : "Connect to WiFi";
         case MENU_ARP:    return "ARP Poisoning";
         case MENU_WPASEC: return "WPA-SEC Upload";
+        case MENU_MITM:   return "MITM Sniffer";
         default:          return "";
     }
 }
@@ -119,8 +122,9 @@ static void on_key(screen_t *self, key_code_t key)
             } else if (item_id == MENU_ARP) {
                 // ARP Poisoning - push hosts screen
                 screen_manager_push(arp_hosts_screen_create, NULL);
+            } else if (item_id == MENU_MITM) {
+                screen_manager_push(mitm_sniffer_screen_create, NULL);
             } else if (item_id == MENU_WPASEC) {
-                // WPA-SEC Upload
                 screen_manager_push(wpasec_upload_screen_create, NULL);
             }
             break;
@@ -173,6 +177,7 @@ screen_t* network_attacks_screen_create(void *params)
     data->items[idx++] = MENU_WIFI;
     if (red_team) {
         data->items[idx++] = MENU_ARP;
+        data->items[idx++] = MENU_MITM;
     }
     data->items[idx++] = MENU_WPASEC;
     data->menu_count = idx;
