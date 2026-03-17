@@ -6,6 +6,7 @@
  */
 
 #include "buzzer.h"
+#include "settings.h"
 #include "driver/i2s_std.h"
 #include "driver/i2c.h"
 #include "driver/gpio.h"
@@ -28,6 +29,11 @@ static bool buzzer_initialized = false;
 
 // Fixed buffer to avoid malloc during beep
 static int16_t audio_buffer[CHUNK_FRAMES * 2];
+
+static bool buzzer_can_play(void)
+{
+    return buzzer_initialized && tx_handle && settings_get_sound_enabled();
+}
 
 static esp_err_t es8311_write_reg(uint8_t reg, uint8_t val)
 {
@@ -173,7 +179,7 @@ esp_err_t buzzer_init(void)
 
 void buzzer_beep(uint32_t frequency_hz, uint32_t duration_ms)
 {
-    if (!buzzer_initialized || !tx_handle) {
+    if (!buzzer_can_play()) {
         return;
     }
     
@@ -218,11 +224,13 @@ void buzzer_beep(uint32_t frequency_hz, uint32_t duration_ms)
 
 void buzzer_beep_attack(void)
 {
+    if (!buzzer_can_play()) return;
     buzzer_beep(2000, 80);
 }
 
 void buzzer_beep_success(void)
 {
+    if (!buzzer_can_play()) return;
     buzzer_beep(1000, 100);
     vTaskDelay(pdMS_TO_TICKS(30));
     buzzer_beep(1500, 150);
@@ -230,6 +238,7 @@ void buzzer_beep_success(void)
 
 void buzzer_beep_capture(void)
 {
+    if (!buzzer_can_play()) return;
     buzzer_beep(1200, 60);
 }
 
