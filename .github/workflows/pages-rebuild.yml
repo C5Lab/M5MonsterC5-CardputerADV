@@ -1,4 +1,4 @@
-name: Rebuild GitHub Pages (Web Flasher)
+name: Pages Only
 
 on:
   workflow_dispatch:
@@ -6,10 +6,19 @@ on:
       release_tag:
         description: "Optional release tag (e.g. v1.2.3). Leave empty to use latest release."
         required: false
+  push:
+    branches: [main, master]
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages-rebuild.yml"
+
+concurrency:
+  group: github-pages-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   pages:
-    name: Rebuild Pages
+    name: Deploy Pages Only
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -38,10 +47,10 @@ jobs:
           set -euo pipefail
           TAG="${INPUT_TAG:-}"
           if [ -z "$TAG" ]; then
-            TAG=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+            TAG="$(gh api "/repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
           fi
           if [ -z "$TAG" ]; then
-            echo "No release tag available" >&2
+            echo "Failed to resolve release tag" >&2
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
