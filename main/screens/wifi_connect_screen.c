@@ -95,7 +95,11 @@ static void start_connect(wifi_connect_data_t *data)
     uart_register_line_callback(uart_line_callback, data);
 
     char cmd[128];
-    snprintf(cmd, sizeof(cmd), "wifi_connect %s %s", data->ssid, data->password);
+    if (data->password[0] != '\0') {
+        snprintf(cmd, sizeof(cmd), "wifi_connect %s %s", data->ssid, data->password);
+    } else {
+        snprintf(cmd, sizeof(cmd), "wifi_connect %s", data->ssid);
+    }
     uart_send_command(cmd);
 }
 
@@ -267,9 +271,10 @@ static void push_password_input(wifi_connect_data_t *data)
     text_input_params_t *params = malloc(sizeof(text_input_params_t));
     if (params) {
         params->title = "Enter Password";
-        params->hint = "WiFi password";
+        params->hint = "WiFi password (empty=open)";
         params->on_submit = on_password_submitted;
         params->user_data = data;
+        params->allow_empty = true;
         screen_manager_push(text_input_screen_create, params);
     }
 }

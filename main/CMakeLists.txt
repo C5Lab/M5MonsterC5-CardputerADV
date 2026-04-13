@@ -83,6 +83,7 @@ idf_component_register(
         "screens/arp_hosts_screen.c"
         "screens/arp_attack_screen.c"
         "screens/mitm_sniffer_screen.c"
+        "screens/nmap_screen.c"
         "screens/rogue_ap_ssid_screen.c"
         "screens/rogue_ap_password_screen.c"
         "screens/rogue_ap_html_screen.c"
