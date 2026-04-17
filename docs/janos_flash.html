@@ -398,8 +398,7 @@
       }
     };
 
-    const bufferToBinaryString = (buffer) => {
-      const bytes = new Uint8Array(buffer);
+    const bytesToBinaryString = (bytes) => {
       const chunk = 0x8000;
       let result = "";
       for (let i = 0; i < bytes.length; i += chunk) {
@@ -629,7 +628,7 @@
         log(`Fetching ${url} @ 0x${part.offset.toString(16)}`);
         const { buf, usedUrl } = await resolveAssetUrl(url);
         log(`Fetched ${usedUrl}`);
-        files.push({ data: bufferToBinaryString(buf), address: part.offset });
+        files.push({ data: new Uint8Array(buf), address: part.offset });
       }
       return files;
     };
@@ -676,7 +675,7 @@ const flash = async () => {
             ui.progress.style.width = `${pct}%`;
             setStatus(`Flashing ${fileIndex + 1}/${files.length}  ${pct}%`);
           },
-          calculateMD5Hash: (image) => CryptoJS.MD5(CryptoJS.enc.Latin1.parse(image)),
+          calculateMD5Hash: (image) => CryptoJS.MD5(CryptoJS.enc.Latin1.parse(bytesToBinaryString(image))).toString(),
         };
         await state.esploader.writeFlash(flashOptions);
         await state.esploader.after();

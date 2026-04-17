@@ -1,3 +1,5 @@
 .vscode/settings.json
 tools/docker_bin_output/
 tools/docker_bin_output/
+.flash-venv/
+**/.flash-venv/
