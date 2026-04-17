@@ -315,7 +315,7 @@ static void on_key(screen_t *self, key_code_t key)
                 
                 // Send connect command
                 char cmd[128];
-                snprintf(cmd, sizeof(cmd), "wifi_connect %s %s", 
+                snprintf(cmd, sizeof(cmd), "wifi_connect \"%s\" \"%s\"", 
                          data->connect_ssid, data->connect_password);
                 uart_send_command(cmd);
             }

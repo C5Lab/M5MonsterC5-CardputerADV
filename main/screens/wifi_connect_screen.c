@@ -43,6 +43,8 @@ typedef struct {
     int pass_timeout_ticks;
     bool pass_found;
     screen_t *self;
+    bool auto_close_on_success;
+    int auto_close_ticks;
 
     int method_index;       // 0=Scan, 1=Manual
     wifi_network_t *networks;
@@ -95,7 +97,7 @@ static void start_connect(wifi_connect_data_t *data)
     uart_register_line_callback(uart_line_callback, data);
 
     char cmd[128];
-    snprintf(cmd, sizeof(cmd), "wifi_connect %s %s", data->ssid, data->password);
+    snprintf(cmd, sizeof(cmd), "wifi_connect \"%s\" \"%s\"", data->ssid, data->password);
     uart_send_command(cmd);
 }
 
@@ -478,6 +480,14 @@ static void on_tick(screen_t *self)
         }
         return;
     }
+
+    if (data->state == STATE_RESULT && data->success && data->auto_close_on_success) {
+        data->auto_close_ticks++;
+        if (data->auto_close_ticks >= 2) {
+            screen_manager_pop();
+            return;
+        }
+    }
     
     if (data->needs_redraw) {
         data->needs_redraw = false;
@@ -665,8 +675,6 @@ static void on_resume(screen_t *self)
 
 screen_t* wifi_connect_screen_create(void *params)
 {
-    (void)params;
-    
     ESP_LOGI(TAG, "Creating WiFi connect screen...");
     
     screen_t *screen = screen_alloc();
@@ -680,6 +688,13 @@ screen_t* wifi_connect_screen_create(void *params)
     
     data->state = STATE_CHOOSE_METHOD;
     data->self = screen;
+    data->auto_close_on_success = false;
+    data->auto_close_ticks = 0;
+    wifi_connect_params_t *in = (wifi_connect_params_t *)params;
+    if (in) {
+        data->auto_close_on_success = in->auto_close_on_success;
+        free(in);
+    }
     
     screen->user_data = data;
     screen->on_key = on_key;

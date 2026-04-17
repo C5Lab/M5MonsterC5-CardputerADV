@@ -8,11 +8,13 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 
 static const char *TAG = "UART";
@@ -34,12 +36,14 @@ static void *scan_callback_user_data = NULL;
 static wifi_network_t networks[MAX_NETWORKS];
 static int network_count = 0;
 static char scan_status[64] = "Ready";
+static int64_t scan_last_poll_us = 0;
 
 // Mutex for thread safety
 static SemaphoreHandle_t uart_mutex = NULL;
 
 // WiFi client connection state
 static bool wifi_connected = false;
+static bool wardrive_active = false;
 
 // Board ping detection state
 static volatile bool pong_received = false;
@@ -61,49 +65,63 @@ static void log_memory_info(const char *context)
 }
 
 /**
+ * @brief Parse quoted CSV fields in-place.
+ */
+static int parse_quoted_csv_fields(char *line, char **fields, int max_fields)
+{
+    if (!line || !fields || max_fields <= 0) return 0;
+    int field_count = 0;
+    char *p = line;
+
+    while (*p && field_count < max_fields) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (*p != '"') break;
+        p++;
+        fields[field_count++] = p;
+        while (*p) {
+            if (*p == '"') {
+                *p = '\0';
+                p++;
+                break;
+            }
+            p++;
+        }
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == ',') p++;
+    }
+    return field_count;
+}
+
+static int find_network_by_bssid(const char *bssid)
+{
+    if (!bssid || !bssid[0]) return -1;
+    for (int i = 0; i < network_count; i++) {
+        if (strcasecmp(networks[i].bssid, bssid) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
  * @brief Parse a CSV network line
- * Format: "1","SSID","","BSSID","channel","security","rssi","band"
+ * Format: "1","SSID","","BSSID","channel","security","rssi","band","vendor"
  */
 static bool parse_network_line(const char *line, wifi_network_t *network)
 {
-    // Check if line starts with a quote (CSV format)
-    if (line[0] != '"') {
+    if (!line || !network || line[0] != '"') {
         return false;
     }
 
-    // Parse using simple state machine
     char *str = strdup(line);
     if (!str) return false;
 
-    char *fields[8] = {0};
-    int field_count = 0;
-    char *ptr = str;
-    
-    while (*ptr && field_count < 8) {
-        // Skip leading quote
-        if (*ptr == '"') ptr++;
-        
-        // Find start of field
-        fields[field_count] = ptr;
-        
-        // Find end of field (closing quote)
-        while (*ptr && *ptr != '"') ptr++;
-        if (*ptr == '"') {
-            *ptr = '\0';
-            ptr++;
-        }
-        
-        // Skip comma
-        if (*ptr == ',') ptr++;
-        
-        field_count++;
-    }
-
+    char *fields[12] = {0};
+    int field_count = parse_quoted_csv_fields(str, fields, 12);
     if (field_count >= 8) {
         network->id = atoi(fields[0]);
         strncpy(network->ssid, fields[1], MAX_SSID_LEN - 1);
         network->ssid[MAX_SSID_LEN - 1] = '\0';
-        // fields[2] is empty
         strncpy(network->bssid, fields[3], MAX_BSSID_LEN - 1);
         network->bssid[MAX_BSSID_LEN - 1] = '\0';
         network->channel = atoi(fields[4]);
@@ -113,13 +131,10 @@ static bool parse_network_line(const char *line, wifi_network_t *network)
         strncpy(network->band, fields[7], MAX_BAND_LEN - 1);
         network->band[MAX_BAND_LEN - 1] = '\0';
         network->selected = false;
-        
-        free(str);
-        return true;
     }
-
+    bool ok = (field_count >= 8);
     free(str);
-    return false;
+    return ok;
 }
 
 /**
@@ -142,7 +157,7 @@ static void process_line(const char *line)
     // Handle scan mode
     if (is_scanning) {
         // Check for scan completion
-        if (strstr(line, "Scan results printed.") != NULL) {
+        if (strstr(line, "Scan results printed") != NULL) {
             ESP_LOGI(TAG, "Scan complete, found %d networks", network_count);
             snprintf(scan_status, sizeof(scan_status), "Found %d networks", network_count);
             is_scanning = false;
@@ -159,7 +174,12 @@ static void process_line(const char *line)
         if (line[0] == '"' && network_count < MAX_NETWORKS) {
             wifi_network_t network = {0};
             if (parse_network_line(line, &network)) {
-                networks[network_count++] = network;
+                int existing = find_network_by_bssid(network.bssid);
+                if (existing >= 0) {
+                    networks[existing] = network;
+                } else if (network_count < MAX_NETWORKS) {
+                    networks[network_count++] = network;
+                }
                 snprintf(scan_status, sizeof(scan_status), "Scanning... %d networks", network_count);
             }
         }
@@ -199,6 +219,14 @@ static void uart_rx_task(void *arg)
                 } else if (line_pos < sizeof(line_buffer) - 1) {
                     line_buffer[line_pos++] = c;
                 }
+            }
+        }
+
+        if (is_scanning) {
+            int64_t now = esp_timer_get_time();
+            if (now - scan_last_poll_us >= 1000000) {
+                scan_last_poll_us = now;
+                uart_send_command("show_scan_results");
             }
         }
     }
@@ -269,9 +297,9 @@ esp_err_t uart_send_command(const char *cmd)
     int len = strlen(cmd);
     int written = uart_write_bytes(UART_PORT_NUM, cmd, len);
     
-    // Send newline if not present
-    if (len > 0 && cmd[len - 1] != '\n') {
-        uart_write_bytes(UART_PORT_NUM, "\n", 1);
+    // Commands must end with CRLF.
+    if (len < 2 || cmd[len - 2] != '\r' || cmd[len - 1] != '\n') {
+        uart_write_bytes(UART_PORT_NUM, "\r\n", 2);
     }
     
     xSemaphoreGive(uart_mutex);
@@ -326,11 +354,13 @@ esp_err_t uart_start_wifi_scan(uart_scan_complete_callback_t callback, void *use
     is_scanning = true;
     scan_callback = callback;
     scan_callback_user_data = user_data;
+    scan_last_poll_us = esp_timer_get_time();
     snprintf(scan_status, sizeof(scan_status), "Starting scan...");
     
     xSemaphoreGive(uart_mutex);
 
     // Send scan command
+    uart_flush_rx();
     return uart_send_command("scan_networks");
 }
 
@@ -352,6 +382,33 @@ bool uart_is_wifi_connected(void)
 void uart_set_wifi_connected(bool connected)
 {
     wifi_connected = connected;
+}
+
+void uart_flush_rx(void)
+{
+    // Non-blocking drain of UART RX buffer to avoid UI/task stalls.
+    size_t buffered = 0;
+    if (uart_get_buffered_data_len(UART_PORT_NUM, &buffered) == ESP_OK && buffered > 0) {
+        uint8_t tmp[64];
+        while (buffered > 0) {
+            int to_read = (buffered > sizeof(tmp)) ? (int)sizeof(tmp) : (int)buffered;
+            int rd = uart_read_bytes(UART_PORT_NUM, tmp, to_read, 0);
+            if (rd <= 0) break;
+            buffered -= (size_t)rd;
+        }
+    }
+    line_pos = 0;
+    memset(line_buffer, 0, sizeof(line_buffer));
+}
+
+bool uart_is_wardrive_active(void)
+{
+    return wardrive_active;
+}
+
+void uart_set_wardrive_active(bool active)
+{
+    wardrive_active = active;
 }
 
 /**

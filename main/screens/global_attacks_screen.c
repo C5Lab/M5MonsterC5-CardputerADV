@@ -9,7 +9,7 @@
 #include "text_input_screen.h"
 #include "global_portal_html_screen.h"
 #include "sniffer_dog_screen.h"
-#include "wardrive_screen.h"
+#include "wardrive_menu_screen.h"
 #include "beacon_spam_menu_screen.h"
 #include "placeholder_screen.h"
 #include "settings.h"
@@ -140,6 +140,7 @@ static void on_key(screen_t *self, key_code_t key)
             {
                 // Get the actual attack type from the filtered list
                 global_attack_type_t attack = data->visible_attacks[data->selected_index];
+                ESP_LOGI(TAG, "Select idx=%d attack=%d", data->selected_index, attack);
                 
                 switch (attack) {
                     case GLOBAL_ATK_BLACKOUT:
@@ -172,7 +173,7 @@ static void on_key(screen_t *self, key_code_t key)
                         break;
 
                     case GLOBAL_ATK_WARDRIVE:
-                        screen_manager_push(wardrive_screen_create, NULL);
+                        screen_manager_push(wardrive_menu_screen_create, NULL);
                         break;
                         
                     default:
