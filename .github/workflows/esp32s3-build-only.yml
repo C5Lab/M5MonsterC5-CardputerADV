@@ -3,7 +3,7 @@ name: ESP32S3 Build Only (IDF 6.0-dev)
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches: [main, master, development]
     paths:
       - 'main/main.c'
       - '.github/scripts/**'

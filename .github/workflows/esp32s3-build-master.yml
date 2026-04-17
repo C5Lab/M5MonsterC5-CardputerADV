@@ -23,7 +23,7 @@ on:
           - "true"
         default: "false"
   push:
-    branches: [main, master]
+    branches: [main, master, development]
     paths:
       - 'main/main.c'
       - '.github/scripts/**'
