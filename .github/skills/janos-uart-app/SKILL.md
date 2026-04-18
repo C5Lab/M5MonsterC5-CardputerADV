@@ -111,12 +111,20 @@ Every command response has a known end marker. Wait for it before proceeding:
 | Command | Completion Marker |
 |---------|-------------------|
 | `scan_networks` | `"Scan results printed"` |
-| `wifi_connect` | `"SUCCESS"` or `"FAILED"` or `"Error"` |
+| `wifi_connect` | `"SUCCESS"` or `"FAILED"` or `"TIMEOUT"` |
+| `start_nmap` | `"Scanned"` + `"open ports"` (final summary line) |
 | `list_hosts` | `"Discovered Hosts"` (header line, data follows) |
 | `list_sd` | `"HTML files found"` (header, data follows), or timeout |
 | `show_pass` | Timeout (no explicit end marker) |
 | `list_probes` | Timeout (no explicit end marker) |
 | `wpasec_upload` | `"Done:"` |
+| `start_pcap` | `"PCAP radio capture started"` or `"PCAP net capture started"` (initial); on stop: `"PCAP saved:"` |
+| `start_beacon_spam` | `"Beacon spam started. Use 'stop' to end."` |
+| `start_beacon_spam_ssids` | `"Beacon spam started. Use 'stop' to end."` (same as `start_beacon_spam`) |
+| `list_ssids` | Timeout (no explicit end marker, list ends after last indexed line) |
+| `add_ssid` | `"Added SSID:"` |
+| `remove_ssid` | `"SSID removed."` |
+| `version` | `"JanOS version: X.Y.Z"` (single line, immediate) |
 
 For commands without explicit end markers, use a timeout with empty-read detection (e.g., 3 consecutive empty reads of 500ms each).
 
@@ -240,10 +248,46 @@ if (strstr(line, "password=")) { /* extract password after = */ }
 if (strstr(line, "Password verified!")) { /* attack succeeded */ }
 ```
 
-**wifi_connect result**:
+**wifi_connect result** (password is optional -- omit for open networks):
 ```c
 if (strstr(rx_buffer, "SUCCESS")) { connected = true; }
-if (strstr(rx_buffer, "FAILED") || strstr(rx_buffer, "Error")) { failed = true; }
+if (strstr(rx_buffer, "FAILED") || strstr(rx_buffer, "TIMEOUT")) { failed = true; }
+// Extract DHCP IP from: "DHCP IP: 192.168.0.5, Netmask: 255.255.255.0, GW: 192.168.0.1"
+const char *dhcp = strstr(rx_buffer, "DHCP IP:");
+if (dhcp) { /* parse IP, Netmask, GW */ }
+```
+
+**start_nmap progress and results**:
+```c
+// Progress line: "  Scanning 192.168.0.4 ports 21-143 [1/100] ..."
+if (strstr(line, "Scanning") && strstr(line, "ports") && strchr(line, '[')) {
+    char ip[16]; int port_from, port_to, current, total;
+    sscanf(line, "  Scanning %15s ports %d-%d [%d/%d]",
+           ip, &port_from, &port_to, &current, &total);
+    int pct = (current * 100) / total;
+    // update progress bar
+}
+// New host: "Host: 192.168.0.4  (00:C0:CA:B4:E6:3F)"
+if (strncmp(trimmed, "Host:", 5) == 0) {
+    char ip[16], mac[18];
+    if (sscanf(trimmed, "Host: %15s (%17[^)])", ip, mac) == 2) {
+        // new host with MAC
+    } else if (sscanf(trimmed, "Host: %15s (MAC unknown)", ip) == 1) {
+        // new host without MAC
+    }
+}
+// Open port: "    135/tcp  open  MSRPC"
+int port; char service[32];
+if (sscanf(trimmed, "%d/tcp open %31s", &port, service) == 2 ||
+    sscanf(trimmed, "%d/tcp  open  %31s", &port, service) == 2) {
+    // found open port
+}
+// Completion: "Scanned 4 hosts, found 4 open ports"
+if (strstr(line, "Scanned") && strstr(line, "open ports")) {
+    int hosts, ports;
+    sscanf(line, "Scanned %d hosts, found %d open ports", &hosts, &ports);
+    // scan complete
+}
 ```
 
 ## Screen Building
@@ -385,8 +429,10 @@ scan_networks → select_networks → list_sd → user picks HTML
 
 ```
 // Check if password known via show_pass evil, or ask user
-wifi_connect <SSID> <password>
-  → wait for "SUCCESS" / "FAILED"
+// For open networks, omit the password:
+wifi_connect <SSID>              // open network
+wifi_connect <SSID> <password>   // WPA/WPA2 network
+  → wait for "SUCCESS" / "FAILED" / "TIMEOUT"
 
 list_hosts
   → wait for "Discovered Hosts", parse IP->MAC lines
@@ -397,6 +443,25 @@ arp_ban <MAC> [IP]
 
 // On back:
 stop
+```
+
+### 3b. Connect-NMAP (Port Scan)
+
+```
+wifi_connect <SSID> [password]
+  → wait for "SUCCESS" / "FAILED" / "TIMEOUT"
+
+start_nmap [quick|medium|heavy] [IP]
+  → Phase 1 (host discovery): parse "Total: N hosts discovered"
+  → Phase 2 (port scanning):
+      for each "Host: <IP>  (<MAC>)" line → add host to list
+      for each "Scanning <IP> ports X-Y [current/total]" → update progress bar
+      for each "<port>/tcp  open  <service>" → add open port to current host
+      "(no open ports)" → mark current host as no-ports
+  → Completion: "Scanned N hosts, found M open ports"
+
+// Can be stopped anytime with:
+stop → "(scan stopped by user)"
 ```
 
 ### 4. Portal/Karma Setup
@@ -419,7 +484,41 @@ start_wardrive   // or start_wardrive_promisc
   → stop
 ```
 
-### 6. Bluetooth Locate
+### 6. Beacon Spam from SSID File
+
+```
+list_ssids → show indexed SSID list
+  → user can add_ssid <name> to append
+  → user can remove_ssid <index> to delete
+start_beacon_spam_ssids
+  → wait for "Beacon spam started. Use 'stop' to end."
+  → stop
+```
+
+Or with inline SSIDs:
+```
+start_beacon_spam "SSID1" "SSID2" "SSID3"
+  → wait for "Beacon spam started. Use 'stop' to end."
+  → stop
+```
+
+### 7. PCAP Capture
+
+```
+// Radio mode (no prerequisites):
+start_pcap radio
+  → wait for "PCAP radio capture started -> ..."
+  → stop → "PCAP saved: ... (N frames, M drops)"
+
+// Net mode (requires WiFi connection):
+wifi_connect <SSID> [password]
+  → wait for "SUCCESS"
+start_pcap net
+  → wait for "PCAP net capture started -> ..."
+  → stop → "PCAP saved: ... (N frames, M drops)"
+```
+
+### 8. Bluetooth Locate
 
 ```
 scan_bt → parse device list → show scrollable list

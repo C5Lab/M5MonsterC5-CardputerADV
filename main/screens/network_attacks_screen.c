@@ -9,6 +9,7 @@
 #include "wpasec_upload_screen.h"
 #include "wardrive_upload_screen.h"
 #include "mitm_sniffer_screen.h"
+#include "nmap_screen.h"
 #include "settings.h"
 #include "uart_handler.h"
 #include "text_ui.h"
@@ -23,7 +24,8 @@ static const char *TAG = "NET_ATTACKS";
 #define MENU_ARP       1
 #define MENU_WPASEC    2
 #define MENU_MITM      3
-#define MENU_WARDRIVE_UPLOAD 4
+#define MENU_NMAP      4
+#define MENU_WARDRIVE_UPLOAD 5
 
 #define MAX_MENU_ITEMS 6
 
@@ -42,6 +44,7 @@ static const char* get_menu_text(int item_id)
         case MENU_ARP:    return "ARP Poisoning";
         case MENU_WPASEC: return "WPA-SEC Upload";
         case MENU_MITM:   return "MITM Sniffer";
+        case MENU_NMAP:   return "Nmap Scanner";
         case MENU_WARDRIVE_UPLOAD: return "Wardrive Upload";
         default:          return "";
     }
@@ -129,6 +132,8 @@ static void on_key(screen_t *self, key_code_t key)
                 screen_manager_push(mitm_sniffer_screen_create, NULL);
             } else if (item_id == MENU_WPASEC) {
                 screen_manager_push(wpasec_upload_screen_create, NULL);
+            } else if (item_id == MENU_NMAP) {
+                screen_manager_push(nmap_screen_create, NULL);
             } else if (item_id == MENU_WARDRIVE_UPLOAD) {
                 screen_manager_push(wardrive_upload_screen_create, NULL);
             }
@@ -184,6 +189,7 @@ screen_t* network_attacks_screen_create(void *params)
         data->items[idx++] = MENU_ARP;
         data->items[idx++] = MENU_MITM;
     }
+    data->items[idx++] = MENU_NMAP;
     data->items[idx++] = MENU_WPASEC;
     data->items[idx++] = MENU_WARDRIVE_UPLOAD;
     data->menu_count = idx;

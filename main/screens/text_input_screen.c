@@ -20,6 +20,7 @@ typedef struct {
     int cursor_pos;
     text_input_callback_t on_submit;
     void *callback_user_data;
+    bool allow_empty;
 } text_input_data_t;
 
 /**
@@ -130,8 +131,8 @@ static void on_key(screen_t *self, key_code_t key)
     
     switch (key) {
         case KEY_ENTER:
-            // Submit if we have input
-            if (data->cursor_pos > 0 && data->on_submit) {
+            // Submit if we have input (or allow_empty is set)
+            if ((data->cursor_pos > 0 || data->allow_empty) && data->on_submit) {
                 data->on_submit(data->input, data->callback_user_data);
             }
             break;
@@ -209,6 +210,7 @@ screen_t* text_input_screen_create(void *params)
     }
     data->on_submit = input_params->on_submit;
     data->callback_user_data = input_params->user_data;
+    data->allow_empty = input_params->allow_empty;
     data->cursor_pos = 0;
     data->input[0] = '\0';
     
