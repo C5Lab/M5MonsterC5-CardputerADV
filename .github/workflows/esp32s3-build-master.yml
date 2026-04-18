@@ -23,7 +23,7 @@ on:
           - "true"
         default: "false"
   push:
-    branches: [main, master]
+    branches: [main, master, development]
     paths:
       - 'main/main.c'
       - '.github/scripts/**'
@@ -355,6 +355,7 @@ jobs:
   discord:
     name: Discord
     needs: [release, package, pages]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'release'
     runs-on: ubuntu-24.04
     steps:
       - name: Notify Discord

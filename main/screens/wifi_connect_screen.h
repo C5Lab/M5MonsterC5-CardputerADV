@@ -7,10 +7,15 @@
 #define WIFI_CONNECT_SCREEN_H
 
 #include "screen_manager.h"
+#include <stdbool.h>
+
+typedef struct {
+    bool auto_close_on_success;
+} wifi_connect_params_t;
 
 /**
  * @brief Create the WiFi connect screen
- * @param params Not used
+ * @param params Optional wifi_connect_params_t*
  * @return Screen instance
  */
 screen_t* wifi_connect_screen_create(void *params);

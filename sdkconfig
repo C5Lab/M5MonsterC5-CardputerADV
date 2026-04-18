@@ -1179,8 +1179,7 @@ CONFIG_TWAI_ERRATA_FIX_LISTEN_ONLY_DOM=y
 #
 # Legacy I2C Driver Configurations
 #
-# default:
-# CONFIG_I2C_SUPPRESS_DEPRECATE_WARN is not set
+CONFIG_I2C_SUPPRESS_DEPRECATE_WARN=y
 # default:
 # CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK is not set
 # end of Legacy I2C Driver Configurations

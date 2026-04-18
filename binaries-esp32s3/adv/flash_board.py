@@ -4,6 +4,29 @@ import subprocess
 import os
 import argparse
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+VENV_DIR = os.path.join(SCRIPT_DIR, ".flash-venv")
+
+def venv_python():
+    scripts_dir = "Scripts" if os.name == "nt" else "bin"
+    executable = "python.exe" if os.name == "nt" else "python"
+    return os.path.join(VENV_DIR, scripts_dir, executable)
+
+def ensure_local_venv():
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        return
+
+    venv_python_path = venv_python()
+    if not os.path.exists(venv_python_path):
+        print(f"Creating local virtual environment in {VENV_DIR}")
+        try:
+            subprocess.check_call([sys.executable, "-m", "venv", VENV_DIR])
+        except subprocess.CalledProcessError as exc:
+            print("Failed to create local virtual environment. Install python3-venv and retry.")
+            sys.exit(exc.returncode)
+
+    os.execv(venv_python_path, [venv_python_path] + sys.argv)
+
 def ensure_packages():
     missing = []
     try:
@@ -16,9 +39,10 @@ def ensure_packages():
         missing.append("esptool")
     if missing:
         print("\033[93mInstalling missing packages: " + ", ".join(missing) + "\033[0m")
-        subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing)
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade"] + missing)
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
+ensure_local_venv()
 ensure_packages()
 import serial
 import serial.tools.list_ports
@@ -65,11 +89,23 @@ def choose_board_interactive():
 
 def board_files(board):
     suffix = board.lower()
-    return {
+    names = {
         "bootloader": f"bootloader-{suffix}.bin",
         "partition-table": f"partition-table-{suffix}.bin",
         "app": f"M5MonsterC5-CardputerADV-{suffix}.bin",
     }
+    candidates = []
+    for base in (os.getcwd(), os.path.join(os.getcwd(), suffix), SCRIPT_DIR, os.path.join(SCRIPT_DIR, suffix)):
+        normalized = os.path.normcase(os.path.abspath(base))
+        if normalized not in candidates:
+            candidates.append(normalized)
+
+    for base in candidates:
+        files = {key: os.path.join(base, name) for key, name in names.items()}
+        if all(os.path.exists(path) for path in files.values()):
+            return files
+
+    return {key: os.path.join(candidates[0], name) for key, name in names.items()}
 
 def check_files(files):
     missing = [f for f in files.values() if not os.path.exists(f)]
@@ -101,7 +137,7 @@ def wait_for_new_port(before, timeout=20.0):
 
 def erase_all(port, baud=DEFAULT_BAUD):
     cmd = [sys.executable, "-m", "esptool", "-p", port, "-b", str(baud),
-           "--before", "default-reset", "--after", "no_reset", "--chip", "esp32c5",
+           "--before", "default_reset", "--after", "no_reset", "--chip", "esp32s3",
            "erase_flash"]
     print(f"{CYAN}Erasing full flash:{RESET} {' '.join(cmd)}")
     res = subprocess.run(cmd)
@@ -114,8 +150,8 @@ def do_flash(port, files, baud=DEFAULT_BAUD, flash_mode="dio", flash_freq="80m")
         sys.executable, "-m", "esptool",
         "-p", port,
         "-b", str(baud),
-        "--before", "default-reset",
-        "--after", "watchdog-reset",            # we'll do a precise reset pattern ourselves
+        "--before", "default_reset",
+        "--after", "no_reset",            # we do a precise reset pattern ourselves
         "--chip", "esp32s3",
         "write-flash",
         "--flash-mode", flash_mode,       # default "dio"
