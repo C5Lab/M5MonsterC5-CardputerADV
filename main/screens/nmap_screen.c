@@ -113,7 +113,7 @@ static const char* scan_type_label(int idx)
     switch (idx) {
         case 0: return "Quick  FTP,SSH,HTTP,SMB,RDP";
         case 1: return "Medium LDAP,MQTT,Docker,Redis";
-        case 2: return "Heavy  TFTP,BGP,Modbus,MongoDB";
+        case 2: return "Heavy  TFTP,BGP,Modbus,Mongo";
         default: return "";
     }
 }

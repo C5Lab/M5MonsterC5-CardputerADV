@@ -693,7 +693,7 @@ screen_t* wifi_connect_screen_create(void *params)
     
     data->state = STATE_CHOOSE_METHOD;
     data->self = screen;
-    data->auto_close_on_success = false;
+    data->auto_close_on_success = true;
     data->auto_close_ticks = 0;
     wifi_connect_params_t *in = (wifi_connect_params_t *)params;
     if (in) {

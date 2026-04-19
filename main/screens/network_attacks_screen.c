@@ -7,7 +7,6 @@
 #include "wifi_connect_screen.h"
 #include "arp_hosts_screen.h"
 #include "wpasec_upload_screen.h"
-#include "wardrive_upload_screen.h"
 #include "mitm_sniffer_screen.h"
 #include "nmap_screen.h"
 #include "settings.h"
@@ -25,9 +24,8 @@ static const char *TAG = "NET_ATTACKS";
 #define MENU_WPASEC    2
 #define MENU_MITM      3
 #define MENU_NMAP      4
-#define MENU_WARDRIVE_UPLOAD 5
 
-#define MAX_MENU_ITEMS 6
+#define MAX_MENU_ITEMS 5
 
 // Screen user data
 typedef struct {
@@ -45,7 +43,6 @@ static const char* get_menu_text(int item_id)
         case MENU_WPASEC: return "WPA-SEC Upload";
         case MENU_MITM:   return "MITM Sniffer";
         case MENU_NMAP:   return "Nmap Scanner";
-        case MENU_WARDRIVE_UPLOAD: return "Wardrive Upload";
         default:          return "";
     }
 }
@@ -134,8 +131,6 @@ static void on_key(screen_t *self, key_code_t key)
                 screen_manager_push(wpasec_upload_screen_create, NULL);
             } else if (item_id == MENU_NMAP) {
                 screen_manager_push(nmap_screen_create, NULL);
-            } else if (item_id == MENU_WARDRIVE_UPLOAD) {
-                screen_manager_push(wardrive_upload_screen_create, NULL);
             }
             break;
         }
@@ -191,7 +186,6 @@ screen_t* network_attacks_screen_create(void *params)
     }
     data->items[idx++] = MENU_NMAP;
     data->items[idx++] = MENU_WPASEC;
-    data->items[idx++] = MENU_WARDRIVE_UPLOAD;
     data->menu_count = idx;
     
     ESP_LOGI(TAG, "Network menu: show_arp=%d, menu_count=%d", data->show_arp, data->menu_count);
