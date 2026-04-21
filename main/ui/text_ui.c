@@ -72,6 +72,46 @@ void ui_draw_char(int x, int y, char c, uint16_t fg, uint16_t bg)
     }
 }
 
+static void ui_draw_glyph(int x, int y, const uint8_t *glyph, uint16_t fg, uint16_t bg)
+{
+    if (x < 0 || y < 0 || x + FONT_WIDTH > DISPLAY_WIDTH || y + FONT_HEIGHT > DISPLAY_HEIGHT) {
+        return;
+    }
+
+    if (bg != UI_COLOR_BG) {
+        display_fill_rect(x, y, FONT_WIDTH, FONT_HEIGHT, bg);
+    } else {
+        display_fill_rect(x, y, FONT_WIDTH, FONT_HEIGHT, UI_COLOR_BG);
+    }
+
+    for (int row = 0; row < FONT_HEIGHT; row++) {
+        uint8_t row_data = glyph[row];
+        for (int col = 0; col < FONT_WIDTH; col++) {
+            if (row_data & (0x80 >> col)) {
+                display_draw_pixel(x + col, y + row, fg);
+            }
+        }
+    }
+}
+
+static int ui_utf8_display_len(const char *text)
+{
+    int len = 0;
+    while (*text) {
+        unsigned char ch = (unsigned char)*text;
+        if (ch >= 0xC0 && ch <= 0xDF && text[1] && ((unsigned char)text[1] & 0xC0) == 0x80) {
+            text += 2;
+            len++;
+        } else if (ch >= 0x80) {
+            text++;
+        } else {
+            text++;
+            len++;
+        }
+    }
+    return len;
+}
+
 void ui_draw_text(int x, int y, const char *text, uint16_t fg, uint16_t bg)
 {
     if (!text) return;
@@ -82,11 +122,29 @@ void ui_draw_text(int x, int y, const char *text, uint16_t fg, uint16_t bg)
         if (*text == '\n') {
             x = start_x;
             y += FONT_HEIGHT;
+            text++;
         } else {
-            ui_draw_char(x, y, *text, fg, bg);
-            x += FONT_WIDTH;
+            unsigned char ch = (unsigned char)*text;
+
+            if (ch >= 0xC0 && ch <= 0xDF && text[1] && ((unsigned char)text[1] & 0xC0) == 0x80) {
+                uint16_t codepoint = ((ch & 0x1F) << 6) | ((unsigned char)text[1] & 0x3F);
+                const uint8_t *glyph = font_get_polish_glyph(codepoint);
+                if (glyph) {
+                    ui_draw_glyph(x, y, glyph, fg, bg);
+                } else {
+                    ui_draw_char(x, y, '?', fg, bg);
+                }
+                x += FONT_WIDTH;
+                text += 2;
+            } else if (ch >= 0x80) {
+                text++;
+                continue;
+            } else {
+                ui_draw_char(x, y, *text, fg, bg);
+                x += FONT_WIDTH;
+                text++;
+            }
         }
-        text++;
         
         // Wrap check
         if (x + FONT_WIDTH > DISPLAY_WIDTH) {
@@ -114,7 +172,7 @@ void ui_print_center(int row, const char *text, uint16_t fg)
 {
     if (!text) return;
     
-    int len = strlen(text);
+    int len = ui_utf8_display_len(text);
     int col = (UI_COLS - len) / 2;
     if (col < 0) col = 0;
     
@@ -203,7 +261,7 @@ void ui_draw_title(const char *title)
     
     // Draw title text centered
     if (title) {
-        int len = strlen(title);
+        int len = ui_utf8_display_len(title);
         int x = (DISPLAY_WIDTH - len * FONT_WIDTH) / 2;
         ui_draw_text(x, 1, title, UI_COLOR_TITLE, title_bg);
     }

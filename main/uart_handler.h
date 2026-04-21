@@ -116,6 +116,23 @@ void uart_set_wifi_connected(bool connected);
  */
 bool uart_check_board_ping(int timeout_ms);
 
+/**
+ * @brief Flush pending RX data from UART driver
+ */
+void uart_flush_rx(void);
+
+/**
+ * @brief Get wardrive activity flag
+ * @return true when wardrive is running
+ */
+bool uart_is_wardrive_active(void);
+
+/**
+ * @brief Set wardrive activity flag
+ * @param active true when wardrive is running
+ */
+void uart_set_wardrive_active(bool active);
+
 #endif // UART_HANDLER_H
 
 

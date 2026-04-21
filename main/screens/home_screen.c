@@ -11,6 +11,7 @@
 #include "deauth_detector_screen.h"
 #include "compromised_menu_screen.h"
 #include "network_attacks_screen.h"
+#include "wardrive_menu_screen.h"
 #include "settings_screen.h"
 #include "placeholder_screen.h"
 #include "settings.h"
@@ -30,12 +31,13 @@ typedef struct {
 
 static const menu_item_t menu_items[] = {
     {"WiFi Scan & Attack", "WiFi Scan & Test", wifi_scan_screen_create, NULL},
-    {"Global WiFi Attacks", "Global WiFi Tests", global_attacks_screen_create, NULL},
-    {"WiFi Sniff&Karma", "WiFi Sniff&Karma", sniff_karma_menu_screen_create, NULL},
-    {"Deauth Detector", "Deauth Detector", deauth_detector_screen_create, NULL},
     {"Bluetooth", "Bluetooth", bt_menu_screen_create, NULL},
     {"Compromised data", "Compromised data", compromised_menu_screen_create, NULL},
-    {"Network Attacks", "Network Tests", network_attacks_screen_create, NULL},
+    {"Deauth Detector", "Deauth Detector", deauth_detector_screen_create, NULL},
+    {"Global WiFi Attacks", "Global WiFi Tests", global_attacks_screen_create, NULL},
+    {"Network Tools", "Network Tools", network_attacks_screen_create, NULL},
+    {"Wardrive", "Wardrive", wardrive_menu_screen_create, NULL},
+    {"WiFi Sniff&Karma", "WiFi Sniff&Karma", sniff_karma_menu_screen_create, NULL},
     {"Settings", "Settings", settings_screen_create, NULL},
 };
 

@@ -188,7 +188,7 @@ static void on_password_submitted(const char *text, void *user_data)
     
     // Send connect command
     char cmd[128];
-    snprintf(cmd, sizeof(cmd), "wifi_connect %s %s", data->network.ssid, data->password);
+    snprintf(cmd, sizeof(cmd), "wifi_connect \"%s\" \"%s\"", data->network.ssid, data->password);
     uart_send_command(cmd);
 }
 

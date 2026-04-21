@@ -213,7 +213,6 @@ static void on_tick(screen_t *self)
     
     // Block redraws for 2 ticks after first render to avoid double draw
     if (data->ticks_since_first_draw <= 2) {
-        data->needs_redraw = false;
         return;
     }
     

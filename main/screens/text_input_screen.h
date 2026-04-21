@@ -20,6 +20,7 @@ typedef struct {
     const char *hint;               // Hint text below input
     text_input_callback_t on_submit; // Called when ENTER pressed
     void *user_data;                // Passed to callback
+    bool allow_empty;               // Allow submitting empty input
 } text_input_params_t;
 
 /**

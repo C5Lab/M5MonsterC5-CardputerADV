@@ -9,7 +9,8 @@
 #include "text_input_screen.h"
 #include "global_portal_html_screen.h"
 #include "sniffer_dog_screen.h"
-#include "wardrive_screen.h"
+#include "wardrive_menu_screen.h"
+#include "beacon_spam_menu_screen.h"
 #include "placeholder_screen.h"
 #include "settings.h"
 #include "text_ui.h"
@@ -25,6 +26,7 @@ typedef enum {
     GLOBAL_ATK_HANDSHAKER,
     GLOBAL_ATK_PORTAL,
     GLOBAL_ATK_SNIFFER_DOG,
+    GLOBAL_ATK_BEACON_SPAM,
     GLOBAL_ATK_WARDRIVE,
     GLOBAL_ATK_COUNT
 } global_attack_type_t;
@@ -42,11 +44,12 @@ static const global_attack_def_t all_global_attacks[] = {
     {"Handshaker",  GLOBAL_ATK_HANDSHAKER,   true},
     {"Portal",      GLOBAL_ATK_PORTAL,       false},
     {"Sniffer Dog", GLOBAL_ATK_SNIFFER_DOG,  true},
+    {"Beacon Spam", GLOBAL_ATK_BEACON_SPAM,  false},
     {"Wardrive",    GLOBAL_ATK_WARDRIVE,     false},
 };
 
 #define ALL_GLOBAL_ATTACKS_COUNT (sizeof(all_global_attacks) / sizeof(all_global_attacks[0]))
-#define MAX_VISIBLE_GLOBAL_ATTACKS 5
+#define MAX_VISIBLE_GLOBAL_ATTACKS 6
 
 /**
  * @brief Callback when portal SSID is entered
@@ -137,6 +140,7 @@ static void on_key(screen_t *self, key_code_t key)
             {
                 // Get the actual attack type from the filtered list
                 global_attack_type_t attack = data->visible_attacks[data->selected_index];
+                ESP_LOGI(TAG, "Select idx=%d attack=%d", data->selected_index, attack);
                 
                 switch (attack) {
                     case GLOBAL_ATK_BLACKOUT:
@@ -164,8 +168,12 @@ static void on_key(screen_t *self, key_code_t key)
                         screen_manager_push(sniffer_dog_screen_create, NULL);
                         break;
                         
+                    case GLOBAL_ATK_BEACON_SPAM:
+                        screen_manager_push(beacon_spam_menu_screen_create, NULL);
+                        break;
+
                     case GLOBAL_ATK_WARDRIVE:
-                        screen_manager_push(wardrive_screen_create, NULL);
+                        screen_manager_push(wardrive_menu_screen_create, NULL);
                         break;
                         
                     default:

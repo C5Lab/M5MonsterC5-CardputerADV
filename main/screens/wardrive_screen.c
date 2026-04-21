@@ -1,362 +1,519 @@
 /**
  * @file wardrive_screen.c
- * @brief Wardrive screen implementation
+ * @brief Wardrive monitor screen
  */
 
 #include "wardrive_screen.h"
+#include "wardrive_upload_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
 #include "buzzer.h"
 #include "settings.h"
 #include "cap_gps.h"
 #include "esp_log.h"
+#include "esp_err.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <ctype.h>
 
 static const char *TAG = "WARDRIVE";
 
-// Refresh timer interval (200ms)
 #define REFRESH_INTERVAL_US 200000
-
-// CAP GPS position update interval (~2 seconds = 10 ticks of 200ms)
 #define CAP_GPS_UPDATE_TICKS 10
+#define WARDRIVE_RING_SIZE 100
 
-// Wardrive states
 typedef enum {
-    STATE_WAITING_GPS,
-    STATE_RUNNING,
-    STATE_GPS_LOST
+    STATE_STARTING = 0,
+    STATE_SCANNING,
+    STATE_GPS_LOST,
+    STATE_STOPPED
 } wardrive_state_t;
 
-// Screen user data
+typedef struct {
+    char ssid[33];
+    char bssid[18];
+    char security[28];
+    char lat[14];
+    char lon[14];
+    char kind[8];
+} wardrive_entry_t;
+
 typedef struct {
     wardrive_state_t state;
-    char last_ssid[64];
-    char lat[16];  
-    char lon[16];  
+    wardrive_entry_t entries[WARDRIVE_RING_SIZE];
+    int ring_head;
+    int ring_count;
+
+    int wardrive_wifi_count;
+    int wardrive_bt_count;
+    int wardrive_sat_count;
     int gps_wait_elapsed;
-    int gps_wait_timeout;
-    int unique_networks;
+    float wardrive_distance_m;
+
+    char status_main[40];
+    char gps_overlay[40];
+
+    char cur_lat[14];
+    char cur_lon[14];
+
+    bool is_cap_gps;
+    bool trace_enabled;
+    bool wardrive_started;
+    bool start_pending;
+    bool no_sd_overlay;
+    bool no_sd_continue_yes;
+    bool stop_confirm_overlay;
+    bool stop_confirm_yes;
+    int cap_tick_counter;
     bool needs_redraw;
+
     esp_timer_handle_t refresh_timer;
     screen_t *self;
-    // CAP GPS
-    bool is_cap_gps;
-    bool wardrive_started;
-    int cap_tick_counter;
 } wardrive_data_t;
 
-// Forward declaration
 static void draw_screen(screen_t *self);
+extern bool is_board_sd_missing(void);
 
-/**
- * @brief Timer callback - checks if redraw is needed and handles CAP GPS updates
- */
+static void wardrive_send(wardrive_data_t *data, const char *cmd)
+{
+    (void)data;
+    ESP_LOGI(TAG, "Wardrive TX > %s", cmd);
+    esp_err_t ret = uart_send_command(cmd);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "uart_send_command failed for '%s': %s", cmd, esp_err_to_name(ret));
+    }
+}
+
+static bool is_mac_prefix(const char *s)
+{
+    if (!s) return false;
+    for (int i = 0; i < 17; i++) {
+        if ((i + 1) % 3 == 0) {
+            if (s[i] != ':') return false;
+        } else {
+            if (!isxdigit((unsigned char)s[i])) return false;
+        }
+    }
+    return s[17] == ',';
+}
+
+static void trim_brackets(char *s)
+{
+    if (!s) return;
+    size_t len = strlen(s);
+    if (len >= 2 && s[0] == '[' && s[len - 1] == ']') {
+        memmove(s, s + 1, len - 2);
+        s[len - 2] = '\0';
+    }
+}
+
+static bool parse_wardrive_csv_line(const char *line, wardrive_entry_t *entry)
+{
+    if (!line || !entry) return false;
+    if (!(strstr(line, ",WIFI") || strstr(line, ",BLE"))) return false;
+    if (!is_mac_prefix(line)) return false;
+
+    char copy[320];
+    snprintf(copy, sizeof(copy), "%s", line);
+
+    char *fields[16] = {0};
+    int field_count = 0;
+    char *save = NULL;
+    char *tok = strtok_r(copy, ",", &save);
+    while (tok && field_count < 16) {
+        fields[field_count++] = tok;
+        tok = strtok_r(NULL, ",", &save);
+    }
+    if (field_count < 11) return false;
+
+    snprintf(entry->bssid, sizeof(entry->bssid), "%s", fields[0]);
+    snprintf(entry->ssid, sizeof(entry->ssid), "%s", fields[1][0] ? fields[1] : "<hidden>");
+    snprintf(entry->security, sizeof(entry->security), "%s", fields[2][0] ? fields[2] : "-");
+    snprintf(entry->lat, sizeof(entry->lat), "%s", fields[6][0] ? fields[6] : "0");
+    snprintf(entry->lon, sizeof(entry->lon), "%s", fields[7][0] ? fields[7] : "0");
+    snprintf(entry->kind, sizeof(entry->kind), "%s", strstr(line, ",BLE") ? "BLE" : "WIFI");
+
+    if (strcasecmp(entry->kind, "WIFI") == 0) {
+        trim_brackets(entry->security);
+    }
+    if (entry->ssid[0] == '\0') {
+        snprintf(entry->ssid, sizeof(entry->ssid), "%s",
+                 strcasecmp(entry->kind, "BLE") == 0 ? "<unnamed>" : "<hidden>");
+    }
+    return true;
+}
+
+static void push_entry(wardrive_data_t *data, const wardrive_entry_t *entry)
+{
+    if (!data || !entry) return;
+    data->entries[data->ring_head] = *entry;
+    data->ring_head = (data->ring_head + 1) % WARDRIVE_RING_SIZE;
+    if (data->ring_count < WARDRIVE_RING_SIZE) {
+        data->ring_count++;
+    }
+
+    snprintf(data->cur_lat, sizeof(data->cur_lat), "%s", entry->lat);
+    snprintf(data->cur_lon, sizeof(data->cur_lon), "%s", entry->lon);
+    if (strcasecmp(entry->kind, "BLE") == 0) {
+        data->wardrive_bt_count++;
+    } else {
+        data->wardrive_wifi_count++;
+    }
+}
+
+static bool parse_sat_dist(const char *line, int *sats, float *dist)
+{
+    const char *s = strstr(line, "sats:");
+    const char *d = strstr(line, "dist:");
+    if (!s || !d) return false;
+    int sat_tmp = -1;
+    float dist_tmp = -1.0f;
+    if (sscanf(s, "sats: %d", &sat_tmp) != 1) return false;
+    if (sscanf(d, "dist: %f", &dist_tmp) != 1) return false;
+    *sats = sat_tmp;
+    *dist = dist_tmp;
+    return true;
+}
+
+static bool parse_bt_devices(const char *line, int *bt_count)
+{
+    const char *p = strstr(line, "BT devices");
+    if (!p) return false;
+    int v = -1;
+    const char *s = p;
+    while (s > line && !isdigit((unsigned char)*(s - 1))) s--;
+    while (s > line && (isdigit((unsigned char)*(s - 1)) || *(s - 1) == ' ' || *(s - 1) == ',')) s--;
+    if (sscanf(s, "%d", &v) == 1 && v >= 0) {
+        *bt_count = v;
+        return true;
+    }
+    return false;
+}
+
+static void parse_lat_lon_from_text(wardrive_data_t *data, const char *line)
+{
+    if (!data || !line) return;
+    const char *lat = strstr(line, "Lat=");
+    const char *lon = strstr(line, "Lon=");
+    if (!lat || !lon) return;
+
+    lat += 4;
+    lon += 4;
+
+    size_t i = 0;
+    while (lat[i] && i < sizeof(data->cur_lat) - 1) {
+        char c = lat[i];
+        if ((c >= '0' && c <= '9') || c == '-' || c == '+'
+            || c == '.') {
+            data->cur_lat[i] = c;
+            i++;
+        } else {
+            break;
+        }
+    }
+    data->cur_lat[i] = '\0';
+
+    i = 0;
+    while (lon[i] && i < sizeof(data->cur_lon) - 1) {
+        char c = lon[i];
+        if ((c >= '0' && c <= '9') || c == '-' || c == '+'
+            || c == '.') {
+            data->cur_lon[i] = c;
+            i++;
+        } else {
+            break;
+        }
+    }
+    data->cur_lon[i] = '\0';
+}
+
+static void update_status_line(wardrive_data_t *data, const char *line)
+{
+    if (!data || !line) return;
+    parse_lat_lon_from_text(data, line);
+
+    if (strstr(line, "GPS fix obtained")) {
+        data->state = STATE_SCANNING;
+        snprintf(data->gps_overlay, sizeof(data->gps_overlay), "GPS fix obtained");
+    } else if (strstr(line, "GPS fix lost")) {
+        data->state = STATE_GPS_LOST;
+        snprintf(data->gps_overlay, sizeof(data->gps_overlay), "GPS lost...");
+    } else if (strstr(line, "GPS fix recovered")) {
+        data->state = STATE_SCANNING;
+        snprintf(data->gps_overlay, sizeof(data->gps_overlay), "GPS fix recovered");
+    } else if (strstr(line, "Still waiting for GPS fix")) {
+        data->state = STATE_STARTING;
+        int elapsed = 0, timeout = 0;
+        if (sscanf(line, "%*[^'(](%d/%d", &elapsed, &timeout) == 2) {
+            data->gps_wait_elapsed = elapsed;
+        }
+        snprintf(data->gps_overlay, sizeof(data->gps_overlay), "Waiting for GPS fix...");
+    } else if (strstr(line, "No GPS fix obtained")) {
+        data->state = STATE_GPS_LOST;
+        snprintf(data->gps_overlay, sizeof(data->gps_overlay), "No GPS fix obtained");
+    } else if (strstr(line, "Promiscuous wardrive started")) {
+        data->state = STATE_SCANNING;
+        data->wardrive_started = true;
+        uart_set_wardrive_active(true);
+        snprintf(data->status_main, sizeof(data->status_main), "Scanning...");
+    } else if (strstr(line, "Wardrive promisc stopped")) {
+        data->state = STATE_STOPPED;
+        data->wardrive_started = false;
+        uart_set_wardrive_active(false);
+        snprintf(data->status_main, sizeof(data->status_main), "Wardrive stopped");
+    } else if (strstr(line, "Flushed") && strstr(line, "networks")) {
+        snprintf(data->status_main, sizeof(data->status_main), "Networks flushed");
+    } else if (strstr(line, "GPS set")) {
+        snprintf(data->gps_overlay, sizeof(data->gps_overlay), "GPS mode updated");
+    }
+
+    int sats = 0;
+    float dist = 0.0f;
+    if (parse_sat_dist(line, &sats, &dist)) {
+        data->wardrive_sat_count = sats;
+        data->wardrive_distance_m = dist;
+        data->state = STATE_SCANNING;
+    }
+    int bt = 0;
+    if (parse_bt_devices(line, &bt)) {
+        data->wardrive_bt_count = bt;
+    }
+}
+
+static void uart_line_callback(const char *line, void *user_data)
+{
+    wardrive_data_t *data = (wardrive_data_t *)user_data;
+    if (!data) return;
+
+    wardrive_entry_t entry;
+    if (parse_wardrive_csv_line(line, &entry)) {
+        push_entry(data, &entry);
+        data->state = STATE_SCANNING;
+        snprintf(data->status_main, sizeof(data->status_main), "Scanning...");
+        data->needs_redraw = true;
+        return;
+    }
+
+    if (strstr(line, "tab_gps_read")) {
+        char reply[48];
+        if (data->cur_lat[0] && data->cur_lon[0]) {
+            snprintf(reply, sizeof(reply), "%s,%s", data->cur_lat, data->cur_lon);
+        } else {
+            snprintf(reply, sizeof(reply), "%s", "No GPS fix");
+        }
+        uart_send_command(reply);
+    }
+
+    update_status_line(data, line);
+    data->needs_redraw = true;
+}
+
 static void refresh_timer_callback(void *arg)
 {
     wardrive_data_t *data = (wardrive_data_t *)arg;
     if (!data || !data->self) return;
 
-    // CAP GPS position update loop
     if (data->is_cap_gps) {
         data->cap_tick_counter++;
         if (data->cap_tick_counter >= CAP_GPS_UPDATE_TICKS) {
             data->cap_tick_counter = 0;
-
             if (cap_gps_has_fix()) {
                 double lat, lon, alt, hdop;
                 if (cap_gps_get_position(&lat, &lon, &alt, &hdop)) {
-                    // Send position to JanOS via UART1
-                    char cmd[96];
-                    snprintf(cmd, sizeof(cmd), "set_gps_position_cap %.7f %.7f %.1f %.1f",
-                             lat, lon, alt, hdop);
+                    char cmd[80];
+                    snprintf(cmd, sizeof(cmd), "set_gps_position %.7f %.7f", lat, lon);
                     uart_send_command(cmd);
-
-                    // Update display coordinates
-                    snprintf(data->lat, sizeof(data->lat), "%.7f", lat);
-                    snprintf(data->lon, sizeof(data->lon), "%.7f", lon);
-
-                    if (data->state == STATE_WAITING_GPS) {
-                        // First fix - start wardrive
-                        ESP_LOGI(TAG, "CAP GPS fix obtained! Starting wardrive...");
-                        uart_send_command("start_wardrive_promisc");
-                        buzzer_beep_attack();
-                        data->wardrive_started = true;
-                        data->state = STATE_RUNNING;
-                    } else if (data->state == STATE_GPS_LOST) {
-                        ESP_LOGI(TAG, "CAP GPS fix recovered!");
-                        data->state = STATE_RUNNING;
-                    }
-                    data->needs_redraw = true;
+                    snprintf(data->cur_lat, sizeof(data->cur_lat), "%.7f", lat);
+                    snprintf(data->cur_lon, sizeof(data->cur_lon), "%.7f", lon);
+                    (void)alt;
+                    (void)hdop;
                 }
             } else {
-                // No fix
-                if (data->state == STATE_RUNNING) {
-                    ESP_LOGW(TAG, "CAP GPS fix lost!");
-                    uart_send_command("set_gps_position_cap");
-                    data->state = STATE_GPS_LOST;
-                    data->needs_redraw = true;
-                } else if (data->state == STATE_WAITING_GPS) {
-                    // Update satellite count display
-                    data->needs_redraw = true;
-                }
+                uart_send_command("set_gps_position");
             }
         }
+    }
+
+    (void)data->self;
+}
+
+static void on_tick(screen_t *self)
+{
+    wardrive_data_t *data = (wardrive_data_t *)self->user_data;
+    if (!data) return;
+
+    if (data->start_pending) {
+        data->start_pending = false;
+        ESP_LOGI(TAG, "Starting wardrive session...");
+        uart_register_line_callback(uart_line_callback, data);
+        ESP_LOGI(TAG, "Wardrive callback registered");
+        wardrive_send(data, "unselect_networks");
+        if (settings_get_gps_type() == GPS_TYPE_M5) {
+            wardrive_send(data, "gps_set m5");
+            snprintf(data->gps_overlay, sizeof(data->gps_overlay), "GPS set: m5");
+        } else if (settings_get_gps_type() == GPS_TYPE_ATGM) {
+            wardrive_send(data, "gps_set atgm");
+            snprintf(data->gps_overlay, sizeof(data->gps_overlay), "GPS set: atgm");
+        } else {
+            wardrive_send(data, "gps_set external");
+            snprintf(data->gps_overlay, sizeof(data->gps_overlay), "GPS set: external");
+        }
+        wardrive_send(data, data->trace_enabled ? "start_wardrive_promisc_trace"
+                                                : "start_wardrive_promisc");
+        data->wardrive_started = true;
+        uart_set_wardrive_active(true);
+        if (data->is_cap_gps) {
+            cap_gps_init();
+        }
+        buzzer_beep_attack();
+        data->needs_redraw = true;
     }
 
     if (data->needs_redraw) {
         data->needs_redraw = false;
-        draw_screen(data->self);
+        draw_screen(self);
     }
 }
 
-/**
- * @brief Helper to parse "Lat=VALUE Lon=VALUE" or "Lat=VALUE Lon=VALUE." from a string.
- *        Handles both space-separated and end-of-line/period-terminated Lon values.
- */
-static void parse_lat_lon(const char *str, wardrive_data_t *data)
+static void on_resume(screen_t *self)
 {
-    const char *lat_marker = "Lat=";
-    const char *lat_ptr = strstr(str, lat_marker);
-    if (!lat_ptr) return;
-    
-    const char *lat_start = lat_ptr + strlen(lat_marker);
-    const char *lat_end = strchr(lat_start, ' ');
-    if (!lat_end) return;
-    
-    size_t lat_len = lat_end - lat_start;
-    if (lat_len < sizeof(data->lat)) {
-        strncpy(data->lat, lat_start, lat_len);
-        data->lat[lat_len] = '\0';
-    }
-    
-    const char *lon_marker = "Lon=";
-    const char *lon_ptr = strstr(lat_end, lon_marker);
-    if (!lon_ptr) return;
-    
-    const char *lon_start = lon_ptr + strlen(lon_marker);
-    size_t lon_len = 0;
-    const char *lon_end = lon_start;
-    while (*lon_end && *lon_end != ' ' && *lon_end != '\n' && *lon_end != '\r') {
-        if ((*lon_end >= '0' && *lon_end <= '9') || *lon_end == '-') {
-            lon_end++;
-        } else if (*lon_end == '.') {
-            if (*(lon_end + 1) >= '0' && *(lon_end + 1) <= '9') {
-                lon_end++;
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    lon_len = lon_end - lon_start;
-    if (lon_len > 0 && lon_len < sizeof(data->lon)) {
-        strncpy(data->lon, lon_start, lon_len);
-        data->lon[lon_len] = '\0';
-    }
-    
-    ESP_LOGI(TAG, "GPS update: %s, %s", data->lat, data->lon);
-}
-
-/**
- * @brief UART line callback for parsing wardrive promisc output
- */
-static void uart_line_callback(const char *line, void *user_data)
-{
-    wardrive_data_t *data = (wardrive_data_t *)user_data;
+    wardrive_data_t *data = (wardrive_data_t *)self->user_data;
     if (!data) return;
-    
-    // --- Network CSV lines: MAC,SSID,[AUTH],date,ch,rssi,lat,lon,alt,acc,WIFI ---
-    if (strlen(line) > 18 && line[2] == ':' && line[5] == ':' && 
-        line[8] == ':' && line[11] == ':' && line[14] == ':' && line[17] == ',') {
-        const char *ssid_start = line + 18;
-        const char *ssid_end = strchr(ssid_start, ',');
-        if (ssid_end && ssid_end > ssid_start) {
-            size_t ssid_len = ssid_end - ssid_start;
-            if (ssid_len < sizeof(data->last_ssid)) {
-                strncpy(data->last_ssid, ssid_start, ssid_len);
-                data->last_ssid[ssid_len] = '\0';
-            }
-        }
-        // Extract lat/lon from CSV columns 7 and 8 (0-indexed: 6 and 7)
-        const char *p = line;
-        int comma_count = 0;
-        const char *field_starts[9] = {0};
-        field_starts[0] = p;
-        while (*p) {
-            if (*p == ',') {
-                comma_count++;
-                if (comma_count < 9) {
-                    field_starts[comma_count] = p + 1;
-                }
-            }
-            p++;
-        }
-        // field 6 = lat, field 7 = lon
-        if (comma_count >= 8 && field_starts[6] && field_starts[7]) {
-            const char *lat_s = field_starts[6];
-            const char *lat_e = strchr(lat_s, ',');
-            const char *lon_s = field_starts[7];
-            const char *lon_e = strchr(lon_s, ',');
-            if (lat_e && lon_e) {
-                size_t ll = lat_e - lat_s;
-                size_t lo = lon_e - lon_s;
-                if (ll > 0 && ll < sizeof(data->lat)) {
-                    strncpy(data->lat, lat_s, ll);
-                    data->lat[ll] = '\0';
-                }
-                if (lo > 0 && lo < sizeof(data->lon)) {
-                    strncpy(data->lon, lon_s, lo);
-                    data->lon[lo] = '\0';
-                }
-            }
-        }
-        data->unique_networks++;
-        data->needs_redraw = true;
-        return;
-    }
-    
-    // --- GPS fix waiting countdown: "Still waiting for GPS fix... (N/M seconds)" ---
-    const char *still_waiting = strstr(line, "Still waiting for GPS fix");
-    if (still_waiting) {
-        const char *paren = strchr(still_waiting, '(');
-        if (paren) {
-            int elapsed = 0, timeout = 0;
-            if (sscanf(paren, "(%d/%d seconds)", &elapsed, &timeout) == 2) {
-                data->gps_wait_elapsed = elapsed;
-                data->gps_wait_timeout = timeout;
-            }
-        }
-        data->needs_redraw = true;
-        return;
-    }
-    
-    // --- GPS fix obtained: "GPS fix obtained: Lat=... Lon=..." ---
-    if (strstr(line, "GPS fix obtained") != NULL) {
-        ESP_LOGI(TAG, "GPS fix obtained!");
-        data->state = STATE_RUNNING;
-        parse_lat_lon(line, data);
-        data->needs_redraw = true;
-        return;
-    }
-    
-    // --- GPS fix lost: "GPS fix lost! Pausing wardrive..." ---
-    if (strstr(line, "GPS fix lost") != NULL) {
-        ESP_LOGW(TAG, "GPS fix lost!");
-        data->state = STATE_GPS_LOST;
-        data->needs_redraw = true;
-        return;
-    }
-    
-    // --- GPS fix recovered: "GPS fix recovered: Lat=... Lon=... Resuming wardrive." ---
-    if (strstr(line, "GPS fix recovered") != NULL) {
-        ESP_LOGI(TAG, "GPS fix recovered!");
-        data->state = STATE_RUNNING;
-        parse_lat_lon(line, data);
-        data->needs_redraw = true;
-        return;
-    }
-    
-    // --- Wardrive promisc: N unique networks ---
-    const char *promisc_stat = strstr(line, "Wardrive promisc:");
-    if (promisc_stat) {
-        int n = 0;
-        if (sscanf(promisc_stat, "Wardrive promisc: %d unique networks", &n) == 1) {
-            data->unique_networks = n;
-            data->needs_redraw = true;
-        }
-        return;
-    }
+    uart_register_line_callback(uart_line_callback, data);
+    data->needs_redraw = true;
 }
 
 static void draw_screen(screen_t *self)
 {
     wardrive_data_t *data = (wardrive_data_t *)self->user_data;
-    
+
     ui_clear();
-    
-    // Draw title
     ui_draw_title("Wardrive");
-    
-    int row = 2;
-    
-    if (data->state == STATE_WAITING_GPS) {
-        if (data->is_cap_gps) {
-            ui_print(0, row, "Acquiring CAP GPS Fix...", UI_COLOR_HIGHLIGHT);
-            row += 2;
-            int sats = cap_gps_get_satellites();
-            if (sats >= 0) {
-                char sats_line[32];
-                snprintf(sats_line, sizeof(sats_line), "Satellites: %d", sats);
-                ui_print(0, row, sats_line, UI_COLOR_DIMMED);
-            } else {
-                ui_print(0, row, "Waiting for CAP data...", UI_COLOR_DIMMED);
-            }
-        } else {
-            ui_print(0, row, "Acquiring GPS Fix...", UI_COLOR_HIGHLIGHT);
-            row += 2;
-            if (data->gps_wait_timeout > 0) {
-                char wait_line[48];
-                snprintf(wait_line, sizeof(wait_line), "Waiting: %d/%d seconds",
-                         data->gps_wait_elapsed, data->gps_wait_timeout);
-                ui_print(0, row, wait_line, UI_COLOR_DIMMED);
-            } else {
-                ui_print(0, row, "Need clear view of the sky.", UI_COLOR_DIMMED);
-            }
-        }
-    } else {
-        // STATE_RUNNING or STATE_GPS_LOST
-        char status_line[48];
-        snprintf(status_line, sizeof(status_line), "Wardriving, %d networks found.", data->unique_networks);
-        ui_print(0, row, status_line, UI_COLOR_TEXT);
-        row += 2;
-        
-        if (data->last_ssid[0] != '\0') {
-            char ssid_line[80];
-            snprintf(ssid_line, sizeof(ssid_line), "Last SSID: %s", data->last_ssid);
-            ui_print(0, row, ssid_line, UI_COLOR_TEXT);
-        } else {
-            ui_print(0, row, "Last SSID: -", UI_COLOR_DIMMED);
-        }
-        row += 2;
-        
-        if (data->state == STATE_GPS_LOST) {
-            if (data->is_cap_gps) {
-                ui_print(0, row, "CAP GPS fix lost! Pausing...", UI_COLOR_HIGHLIGHT);
-            } else {
-                ui_print(0, row, "GPS fix lost! Pausing...", UI_COLOR_HIGHLIGHT);
-            }
-        } else if (data->lat[0] != '\0' && data->lon[0] != '\0') {
-            char gps_line[48];
-            double lat_val = strtod(data->lat, NULL);
-            double lon_val = strtod(data->lon, NULL);
-            snprintf(gps_line, sizeof(gps_line), "Last GPS: %.5f, %.5f", lat_val, lon_val);
-            ui_print(0, row, gps_line, UI_COLOR_DIMMED);
-        } else {
-            ui_print(0, row, "Last GPS: Waiting...", UI_COLOR_DIMMED);
-        }
+
+    if (data->no_sd_overlay) {
+        ui_print_center(2, "No SD card!", UI_COLOR_HIGHLIGHT);
+        ui_print_center(3, "Logs won't be saved.", UI_COLOR_TEXT);
+        ui_print_center(4, "Continue anyway?", UI_COLOR_TEXT);
+        ui_print_center(5, data->no_sd_continue_yes ? "No   [Yes]" : "[No]   Yes", UI_COLOR_DIMMED);
+        ui_draw_status("LEFT/RIGHT OK BACK");
+        return;
     }
-    
-    // Draw status bar
-    ui_draw_status("ESC: Stop & Exit");
+
+    if (data->stop_confirm_overlay) {
+        ui_print_center(3, "Stop wardrive?", UI_COLOR_HIGHLIGHT);
+        ui_print_center(4, data->stop_confirm_yes ? "No   [Yes]" : "[No]   Yes", UI_COLOR_TEXT);
+        ui_draw_status("LEFT/RIGHT OK BACK");
+        return;
+    }
+
+    const char *state_text = "Starting...";
+    if (data->state == STATE_SCANNING) state_text = "Scanning...";
+    if (data->state == STATE_GPS_LOST) state_text = "GPS lost...";
+    if (data->state == STATE_STOPPED) state_text = "Wardrive stopped";
+
+    if (data->state == STATE_STARTING && data->gps_wait_elapsed > 0) {
+        char wait_line[40];
+        snprintf(wait_line, sizeof(wait_line), "Waiting fix: %ds", data->gps_wait_elapsed);
+        ui_print(0, 1, wait_line, UI_COLOR_HIGHLIGHT);
+    } else if (data->status_main[0]) {
+        ui_print(0, 1, data->status_main, UI_COLOR_HIGHLIGHT);
+    } else {
+        ui_print(0, 1, state_text, UI_COLOR_HIGHLIGHT);
+    }
+
+    char counter[40];
+    float km = data->wardrive_distance_m / 1000.0f;
+    snprintf(counter, sizeof(counter), "WiFi:%d BT:%d SAT:%d %.2fkm",
+             data->wardrive_wifi_count, data->wardrive_bt_count, data->wardrive_sat_count, km);
+    ui_print(0, 2, counter, UI_COLOR_DIMMED);
+
+    char seen_line[40];
+    snprintf(seen_line, sizeof(seen_line), "Captured: %d entries", data->ring_count);
+    ui_print(0, 3, seen_line, UI_COLOR_TEXT);
+
+    if (data->cur_lat[0] && data->cur_lon[0]) {
+        char gps_line[40];
+        snprintf(gps_line, sizeof(gps_line), "GPS: %.7s, %.7s", data->cur_lat, data->cur_lon);
+        ui_print(0, 4, gps_line, UI_COLOR_TEXT);
+    } else {
+        ui_print(0, 4, "GPS: no fix", UI_COLOR_DIMMED);
+    }
+
+    if (data->gps_overlay[0]) {
+        ui_print(0, 5, data->gps_overlay, UI_COLOR_DIMMED);
+    }
+
+    ui_draw_status("ESC:Stop S:Send");
 }
 
 static void on_key(screen_t *self, key_code_t key)
 {
+    wardrive_data_t *data = (wardrive_data_t *)self->user_data;
+    if (!data) return;
+
+    if (data->no_sd_overlay) {
+        if (key == KEY_LEFT || key == KEY_RIGHT) {
+            data->no_sd_continue_yes = !data->no_sd_continue_yes;
+            data->needs_redraw = true;
+            return;
+        }
+        if (key == KEY_ENTER || key == KEY_SPACE) {
+            if (data->no_sd_continue_yes) {
+                data->no_sd_overlay = false;
+                data->start_pending = true;
+                data->needs_redraw = true;
+            } else {
+                screen_manager_pop();
+            }
+            return;
+        }
+        if (key == KEY_ESC || key == KEY_BACKSPACE) {
+            screen_manager_pop();
+            return;
+        }
+    }
+
+    if (data->stop_confirm_overlay) {
+        if (key == KEY_LEFT || key == KEY_RIGHT) {
+            data->stop_confirm_yes = !data->stop_confirm_yes;
+            data->needs_redraw = true;
+            return;
+        }
+        if (key == KEY_ENTER || key == KEY_SPACE) {
+            if (data->stop_confirm_yes) {
+                uart_flush_rx();
+                wardrive_send(data, "stop");
+                data->state = STATE_STOPPED;
+                data->wardrive_started = false;
+                uart_set_wardrive_active(false);
+                screen_manager_pop();
+            } else {
+                data->stop_confirm_overlay = false;
+                data->needs_redraw = true;
+            }
+            return;
+        }
+        if (key == KEY_ESC || key == KEY_BACKSPACE) {
+            data->stop_confirm_overlay = false;
+            data->needs_redraw = true;
+            return;
+        }
+    }
+
     switch (key) {
         case KEY_ESC:
         case KEY_Q:
         case KEY_BACKSPACE:
-            // Send stop command and go back
-            uart_send_command("stop");
-            screen_manager_pop();
+            data->stop_confirm_overlay = true;
+            data->stop_confirm_yes = false;
+            data->needs_redraw = true;
             break;
-            
+        case KEY_S:
+            screen_manager_push(wardrive_upload_screen_create, NULL);
+            break;
         default:
             break;
     }
@@ -365,92 +522,69 @@ static void on_key(screen_t *self, key_code_t key)
 static void on_destroy(screen_t *self)
 {
     wardrive_data_t *data = (wardrive_data_t *)self->user_data;
-    
-    // Stop and delete timer
-    if (data && data->refresh_timer) {
-        esp_timer_stop(data->refresh_timer);
-        esp_timer_delete(data->refresh_timer);
-    }
-    
-    // Deinit CAP GPS if active
-    if (data && data->is_cap_gps) {
-        cap_gps_deinit();
-    }
-    
-    // Clear UART callback
     uart_clear_line_callback();
-    
+
     if (data) {
+        if (data->refresh_timer) {
+            esp_timer_stop(data->refresh_timer);
+            esp_timer_delete(data->refresh_timer);
+        }
+        if (data->is_cap_gps) {
+            cap_gps_deinit();
+        }
+        if (data->wardrive_started) {
+            uart_flush_rx();
+            uart_send_command("stop");
+        }
+        uart_set_wardrive_active(false);
         free(data);
     }
 }
 
 screen_t* wardrive_screen_create(void *params)
 {
-    (void)params;
-    
     ESP_LOGI(TAG, "Creating wardrive screen...");
-    
     screen_t *screen = screen_alloc();
     if (!screen) return NULL;
-    
-    // Allocate user data
+
     wardrive_data_t *data = calloc(1, sizeof(wardrive_data_t));
     if (!data) {
         free(screen);
         return NULL;
     }
-    
+
     data->self = screen;
-    data->state = STATE_WAITING_GPS;
-    data->last_ssid[0] = '\0';
-    data->lat[0] = '\0';
-    data->lon[0] = '\0';
+    data->state = STATE_STARTING;
     data->is_cap_gps = (settings_get_gps_type() == GPS_TYPE_CAP);
-    data->wardrive_started = false;
-    data->cap_tick_counter = 0;
-    
+    data->trace_enabled = true;
+    wardrive_run_params_t *in = (wardrive_run_params_t *)params;
+    if (in) {
+        data->trace_enabled = in->trace;
+        free(in);
+    }
+    data->no_sd_overlay = is_board_sd_missing();
+    data->no_sd_continue_yes = false;
+    data->start_pending = !data->no_sd_overlay;
+    snprintf(data->status_main, sizeof(data->status_main), "Starting...");
+    snprintf(data->gps_overlay, sizeof(data->gps_overlay), "Waiting for GPS");
+
     screen->user_data = data;
+    screen->on_draw = draw_screen;
+    screen->on_tick = on_tick;
+    screen->on_resume = on_resume;
     screen->on_key = on_key;
     screen->on_destroy = on_destroy;
-    screen->on_draw = draw_screen;
-    
-    // Create periodic refresh timer
+
     esp_timer_create_args_t timer_args = {
         .callback = refresh_timer_callback,
         .arg = data,
         .name = "wardrive_refresh"
     };
-    
     if (esp_timer_create(&timer_args, &data->refresh_timer) == ESP_OK) {
         esp_timer_start_periodic(data->refresh_timer, REFRESH_INTERVAL_US);
-    } else {
-        ESP_LOGW(TAG, "Failed to create refresh timer");
     }
-    
-    // Register UART callback for parsing wardrive output
-    uart_register_line_callback(uart_line_callback, data);
-    
-    // Draw initial screen first (shows "Acquiring GPS Fix...")
+
     draw_screen(screen);
-    
-    if (data->is_cap_gps) {
-        // CAP GPS mode: init UART2 driver, wait for fix in timer callback
-        ESP_LOGI(TAG, "CAP GPS mode - initializing CAP GPS driver...");
-        esp_err_t ret = cap_gps_init();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to init CAP GPS: %s", esp_err_to_name(ret));
-        }
-        // Wardrive will start when fix is obtained (in refresh_timer_callback)
-    } else {
-        // Non-CAP GPS: existing behavior
-        vTaskDelay(pdMS_TO_TICKS(3000));
-        uart_send_command("start_wardrive_promisc");
-        data->wardrive_started = true;
-        buzzer_beep_attack();
-    }
-    
     ESP_LOGI(TAG, "Wardrive screen created");
     return screen;
 }
-

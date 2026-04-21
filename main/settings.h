@@ -17,6 +17,7 @@
 // Default screen settings
 #define DEFAULT_SCREEN_TIMEOUT_MS   30000   // 30 seconds
 #define DEFAULT_SCREEN_BRIGHTNESS   100     // 100%
+#define DEFAULT_SOUND_ENABLED       true
 
 // Valid GPIO pin range for ESP32-S3
 #define MIN_GPIO_PIN            0
@@ -93,6 +94,19 @@ uint8_t settings_get_screen_brightness(void);
  * @return ESP_OK on success
  */
 esp_err_t settings_set_screen_brightness(uint8_t brightness);
+
+/**
+ * @brief Get sound enabled status
+ * @return true if UI sounds are enabled
+ */
+bool settings_get_sound_enabled(void);
+
+/**
+ * @brief Set sound enabled status
+ * @param enabled true to enable UI sounds
+ * @return ESP_OK on success
+ */
+esp_err_t settings_set_sound_enabled(bool enabled);
 
 // GPS module types
 typedef enum {

@@ -23,7 +23,7 @@ on:
           - "true"
         default: "false"
   push:
-    branches: [main, master]
+    branches: [main, master, development]
     paths:
       - 'main/main.c'
       - '.github/scripts/**'
@@ -38,7 +38,7 @@ jobs:
       contents: read
     runs-on: ubuntu-24.04
     container:
-      image: espressif/idf:v6.0-beta1
+      image: espressif/idf:release-v6.0
     strategy:
       fail-fast: false
       matrix:
@@ -355,6 +355,7 @@ jobs:
   discord:
     name: Discord
     needs: [release, package, pages]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'release'
     runs-on: ubuntu-24.04
     steps:
       - name: Notify Discord
