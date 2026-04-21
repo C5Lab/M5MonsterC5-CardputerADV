@@ -16,7 +16,7 @@ jobs:
       contents: read
     runs-on: [self-hosted, linux, x64]
     container:
-      image: espressif/idf:v6.0-dev
+      image: espressif/idf:release-v6.0
     steps:
       - name: Checkout
         uses: actions/checkout@v4

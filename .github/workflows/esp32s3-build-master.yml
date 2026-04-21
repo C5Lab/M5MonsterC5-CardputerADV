@@ -38,7 +38,7 @@ jobs:
       contents: read
     runs-on: ubuntu-24.04
     container:
-      image: espressif/idf:v6.0-beta1
+      image: espressif/idf:release-v6.0
     strategy:
       fail-fast: false
       matrix:
