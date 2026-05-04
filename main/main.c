@@ -41,14 +41,13 @@ bool is_board_sd_missing(void)
 static void uart_sd_check_line_callback(const char *line, void *user_data)
 {
     (void)user_data;
-    if (!line || board_sd_missing || !board_sd_check_pending) {
+    if (!line || !board_sd_check_pending) {
         return;
     }
 
-    if (strstr(line, "Failed to initialize SD card") != NULL ||
-        strstr(line, "ESP_ERR_INVALID_RESPONSE") != NULL ||
-        strstr(line, "Make sure SD card is properly inserted.") != NULL ||
-        strstr(line, "Command returned non-zero error code") != NULL) {
+    if (strcmp(line, "SD_OK") == 0) {
+        board_sd_check_pending = false;
+    } else if (strcmp(line, "SD_NONE") == 0) {
         board_sd_missing = true;
         board_sd_check_pending = false;
     }
@@ -180,11 +179,10 @@ void app_main(void)
     
     if (board_detected) {
         ESP_LOGI(TAG, "ESP32C5 board detected");
-        ESP_LOGI(TAG, "Checking Monster SD card via list_sd...");
-        vTaskDelay(pdMS_TO_TICKS(1000));  // Let JanOS finish SD init before querying
+        ESP_LOGI(TAG, "Checking Monster SD card via sd_status...");
         board_sd_check_pending = true;
         board_sd_check_start_ms = esp_timer_get_time() / 1000;
-        uart_send_command("list_sd");
+        uart_send_command("sd_status");
     } else {
         ESP_LOGW(TAG, "Continuing without board detection");
     }
@@ -269,7 +267,7 @@ void app_main(void)
         // Stop listening for SD check after a short timeout
         if (board_sd_check_pending) {
             int64_t now_ms = esp_timer_get_time() / 1000;
-            if ((now_ms - board_sd_check_start_ms) > 3000) {
+            if ((now_ms - board_sd_check_start_ms) > 500) {
                 board_sd_check_pending = false;
             }
         }
