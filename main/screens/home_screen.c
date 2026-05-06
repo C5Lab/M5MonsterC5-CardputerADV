@@ -18,6 +18,7 @@
 #include "text_ui.h"
 #include "esp_log.h"
 #include <string.h>
+#include "version.h"
 
 static const char *TAG = "HOME_SCREEN";
 
@@ -65,7 +66,7 @@ static void draw_screen(screen_t *self)
     ui_clear();
     
     // Draw title
-    ui_draw_title("LABORATORIUM");
+    ui_draw_title("LAB5 v" JANOS_ADV_VERSION);
     
     // Draw only visible menu items
     int visible_end = data->scroll_offset + VISIBLE_ITEMS;
