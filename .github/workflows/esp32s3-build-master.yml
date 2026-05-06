@@ -25,7 +25,7 @@ on:
   push:
     branches: [main, master]
     paths:
-      - 'main/main.c'
+      - 'main/version.h'
       - '.github/scripts/**'
       - '.github/workflows/esp32s3-build-master.yml'
   release:
@@ -99,7 +99,7 @@ jobs:
           version=$(python - <<'PY'
           from pathlib import Path
           import re
-          text = Path("main/main.c").read_text()
+          text = Path("main/version.h").read_text()
           m = re.search(r'JANOS_ADV_VERSION\s*"([^"]+)"', text)
           if not m:
               raise SystemExit("JANOS_ADV_VERSION not found")
