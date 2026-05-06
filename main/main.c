@@ -22,7 +22,7 @@
 #include "buzzer.h"
 #include "text_ui.h"
 
-#define JANOS_ADV_VERSION "1.7.2"
+#include "version.h"
 
 // Screen timeout is now configurable via Settings (stored in NVS)
 
@@ -30,8 +30,13 @@ static const char *TAG = "MAIN";
 
 static volatile bool board_sd_missing = false;
 static volatile bool board_sd_check_pending = false;
+static volatile bool board_sd_ok_received = false;
 static int64_t board_sd_check_start_ms = 0;
 static bool board_sd_popup_shown = false;
+
+#define SD_CHECK_TIMEOUT_MS   3000
+#define SD_CHECK_RETRIES      2
+#define SD_CHECK_BOOT_DELAY_MS 1000
 
 bool is_board_sd_missing(void)
 {
@@ -46,6 +51,7 @@ static void uart_sd_check_line_callback(const char *line, void *user_data)
     }
 
     if (strcmp(line, "SD_OK") == 0) {
+        board_sd_ok_received = true;
         board_sd_check_pending = false;
     } else if (strcmp(line, "SD_NONE") == 0) {
         board_sd_missing = true;
@@ -179,10 +185,48 @@ void app_main(void)
     
     if (board_detected) {
         ESP_LOGI(TAG, "ESP32C5 board detected");
-        ESP_LOGI(TAG, "Checking Monster SD card via sd_status...");
-        board_sd_check_pending = true;
-        board_sd_check_start_ms = esp_timer_get_time() / 1000;
-        uart_send_command("sd_status");
+
+        // Give Monster time to finish SD mount after responding to ping
+        ESP_LOGI(TAG, "Waiting %dms for Monster SD init...", SD_CHECK_BOOT_DELAY_MS);
+        vTaskDelay(pdMS_TO_TICKS(SD_CHECK_BOOT_DELAY_MS));
+
+        // Retry sd_status up to SD_CHECK_RETRIES times
+        for (int attempt = 1; attempt <= SD_CHECK_RETRIES; attempt++) {
+            ESP_LOGI(TAG, "SD check attempt %d/%d...", attempt, SD_CHECK_RETRIES);
+            board_sd_ok_received = false;
+            board_sd_missing = false;
+            board_sd_check_pending = true;
+            board_sd_check_start_ms = esp_timer_get_time() / 1000;
+            uart_send_command("sd_status");
+
+            // Block-wait for response (up to SD_CHECK_TIMEOUT_MS per attempt)
+            while (board_sd_check_pending) {
+                int64_t now_ms = esp_timer_get_time() / 1000;
+                if ((now_ms - board_sd_check_start_ms) > SD_CHECK_TIMEOUT_MS) {
+                    board_sd_check_pending = false;
+                    ESP_LOGW(TAG, "SD check attempt %d timed out", attempt);
+                }
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+
+            if (board_sd_ok_received) {
+                ESP_LOGI(TAG, "Monster SD OK on attempt %d", attempt);
+                break;
+            } else if (board_sd_missing) {
+                ESP_LOGW(TAG, "Monster SD missing confirmed on attempt %d", attempt);
+                break;
+            }
+
+            // No response — retry after short pause (except on last attempt)
+            if (attempt < SD_CHECK_RETRIES) {
+                ESP_LOGW(TAG, "No SD response, retrying in 500ms...");
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+        }
+
+        if (!board_sd_ok_received && !board_sd_missing) {
+            ESP_LOGW(TAG, "Monster SD status unknown after all attempts");
+        }
     } else {
         ESP_LOGW(TAG, "Continuing without board detection");
     }
@@ -264,14 +308,6 @@ void app_main(void)
             board_sd_popup_shown = true;
         }
 
-        // Stop listening for SD check after a short timeout
-        if (board_sd_check_pending) {
-            int64_t now_ms = esp_timer_get_time() / 1000;
-            if ((now_ms - board_sd_check_start_ms) > 500) {
-                board_sd_check_pending = false;
-            }
-        }
-        
         // Check for screen timeout (0 = stays on, never dims)
         uint32_t timeout = settings_get_screen_timeout_ms();
         int64_t now = esp_timer_get_time() / 1000;
