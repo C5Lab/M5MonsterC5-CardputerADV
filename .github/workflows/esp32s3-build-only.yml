@@ -5,7 +5,7 @@ on:
   push:
     branches: [main, master, development]
     paths:
-      - 'main/main.c'
+      - 'main/version.h'
       - '.github/scripts/**'
       - '.github/workflows/esp32s3-build-only.yml'
 
