@@ -34,6 +34,11 @@ typedef struct {
     bool needs_redraw;
     bool needs_push_password;
     screen_t *self;
+    // inspect_network response
+    bool inspect_received;
+    bool mfp_capable;
+    bool mfp_required;
+    char uptime_str[24];
 } network_info_data_t;
 
 // Forward declarations
@@ -41,13 +46,64 @@ static void draw_screen(screen_t *self);
 static void on_password_submitted(const char *text, void *user_data);
 
 /**
- * @brief UART callback for WiFi connection result
+ * @brief Parse [INSPECT] response line to extract mfp_capable and uptime_str.
+ * uptime_str value contains spaces (e.g. "3d 22:34:00"), so it is read up to
+ * the next " beacon_interval_tu=" token or end of line.
+ */
+static void parse_inspect_line(const char *line, network_info_data_t *data)
+{
+    if (!line || !data) return;
+    if (strstr(line, "[INSPECT]") == NULL) return;
+
+    const char *p = strstr(line, "mfp_capable=");
+    if (p) {
+        data->mfp_capable = (atoi(p + strlen("mfp_capable=")) != 0);
+    }
+
+    p = strstr(line, "mfp_required=");
+    if (p) {
+        data->mfp_required = (atoi(p + strlen("mfp_required=")) != 0);
+    }
+
+    p = strstr(line, "uptime_str=");
+    if (p) {
+        const char *start = p + strlen("uptime_str=");
+        const char *end = strstr(start, " beacon_interval_tu=");
+        size_t len = end ? (size_t)(end - start) : strlen(start);
+        if (len >= sizeof(data->uptime_str)) len = sizeof(data->uptime_str) - 1;
+        memcpy(data->uptime_str, start, len);
+        data->uptime_str[len] = '\0';
+        // Trim trailing whitespace/CR
+        while (len > 0 && (data->uptime_str[len - 1] == ' ' ||
+                           data->uptime_str[len - 1] == '\r' ||
+                           data->uptime_str[len - 1] == '\n')) {
+            data->uptime_str[--len] = '\0';
+        }
+    }
+
+    data->inspect_received = true;
+    data->needs_redraw = true;
+    ESP_LOGI(TAG, "Inspect: mfp_capable=%d uptime='%s'",
+             data->mfp_capable, data->uptime_str);
+}
+
+/**
+ * @brief UART callback for inspect_network response and WiFi connection result
  */
 static void uart_line_callback(const char *line, void *user_data)
 {
     network_info_data_t *data = (network_info_data_t *)user_data;
-    if (!data || data->state != STATE_CONNECTING) return;
-    
+    if (!data) return;
+
+    // Handle [INSPECT] lines regardless of state
+    if (strstr(line, "[INSPECT]") != NULL) {
+        parse_inspect_line(line, data);
+        return;
+    }
+
+    // Connect responses only relevant while connecting
+    if (data->state != STATE_CONNECTING) return;
+
     // Check for success
     if (strstr(line, "SUCCESS:") != NULL && strstr(line, "Connected") != NULL) {
         data->success = true;
@@ -119,16 +175,26 @@ static void draw_screen(screen_t *self)
     snprintf(line, sizeof(line), "BSSID: %s", net->bssid);
     ui_print(0, 2, line, UI_COLOR_TEXT);
     
-    // Row 3: Security
-    snprintf(line, sizeof(line), "Security: %.18s", net->security);
+    // Row 3: Security (+ MFP indicator once inspect arrived)
+    if (data->inspect_received) {
+        snprintf(line, sizeof(line), "Security: %.10s %s",
+                 net->security, data->mfp_capable ? "MFP" : "NO MFP");
+    } else {
+        snprintf(line, sizeof(line), "Security: %.18s", net->security);
+    }
     ui_print(0, 3, line, UI_COLOR_TEXT);
     
     // Row 4: Signal strength
     snprintf(line, sizeof(line), "Signal: %d dBm", net->rssi);
     ui_print(0, 4, line, UI_COLOR_TEXT);
     
-    // Row 5: Channel
-    snprintf(line, sizeof(line), "Channel: %d", net->channel);
+    // Row 5: Channel (+ uptime once inspect arrived)
+    if (data->inspect_received && data->uptime_str[0]) {
+        snprintf(line, sizeof(line), "Ch:%d  Up:%.16s",
+                 net->channel, data->uptime_str);
+    } else {
+        snprintf(line, sizeof(line), "Channel: %d", net->channel);
+    }
     ui_print(0, 5, line, UI_COLOR_TEXT);
     
     // Row 6: Connect hint
@@ -305,7 +371,13 @@ screen_t* network_info_screen_create(void *params)
     
     // Draw initial screen
     draw_screen(screen);
-    
+
+    // Register UART callback and request inspect_network details
+    uart_register_line_callback(uart_line_callback, data);
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "inspect_network %d", data->network.id);
+    uart_send_command(cmd);
+
     ESP_LOGI(TAG, "Network info screen created");
     return screen;
 }
