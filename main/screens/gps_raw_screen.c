@@ -254,10 +254,9 @@ static void handle_nmea_line(gps_raw_data_t *data, const char *line)
 static gps_status_t compute_status(gps_raw_data_t *data)
 {
     if (data->is_cap_gps) {
-        if (!data->cap_inited) return GPS_STATUS_NO_GPS;
-        int sats = cap_gps_get_satellites();
-        if (sats < 0) return GPS_STATUS_NO_GPS;
-        return cap_gps_has_fix() ? GPS_STATUS_FIX : GPS_STATUS_WAITING;
+        if (!data->cap_inited || !cap_gps_is_receiving()) return GPS_STATUS_NO_GPS;
+        if (cap_gps_has_fix()) return GPS_STATUS_FIX;
+        return GPS_STATUS_WAITING;
     }
 
     int64_t now = esp_timer_get_time();

@@ -23,7 +23,7 @@ static const char *TAG = "CAP_GPS";
 #define CAP_BAUD_RATE   115200
 #define CAP_BUF_SIZE    1024
 #define CAP_LINE_SIZE   256
-#define CAP_FIX_TIMEOUT_US  2000000  // 2 seconds - no data = fix lost
+#define CAP_FIX_TIMEOUT_US  5000000  // 5 seconds - no data = fix lost
 
 // GPS state
 static SemaphoreHandle_t gps_mutex = NULL;
@@ -38,6 +38,7 @@ static struct {
     int satellites;
     bool fix;
     int64_t last_update_us;
+    int64_t last_nmea_us;
 } gps_data;
 
 /**
@@ -187,6 +188,10 @@ static void handle_nmea_line(const char *line)
 {
     const char *nmea = strchr(line, '$');
     if (!nmea) return;
+
+    xSemaphoreTake(gps_mutex, portMAX_DELAY);
+    gps_data.last_nmea_us = esp_timer_get_time();
+    xSemaphoreGive(gps_mutex);
 
     if (strstr(nmea, "GGA") != NULL) {
         parse_gga(nmea);
@@ -365,4 +370,16 @@ int cap_gps_get_satellites(void)
     xSemaphoreGive(gps_mutex);
 
     return sats;
+}
+
+bool cap_gps_is_receiving(void)
+{
+    if (!gps_running || !gps_mutex) return false;
+
+    xSemaphoreTake(gps_mutex, portMAX_DELAY);
+    int64_t last = gps_data.last_nmea_us;
+    xSemaphoreGive(gps_mutex);
+
+    if (last == 0) return false;
+    return (esp_timer_get_time() - last) < CAP_FIX_TIMEOUT_US;
 }

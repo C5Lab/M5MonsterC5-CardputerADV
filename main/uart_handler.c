@@ -142,7 +142,9 @@ static bool parse_network_line(const char *line, wifi_network_t *network)
  */
 static void process_line(const char *line)
 {
-    ESP_LOGI(TAG, "RX: %s", line);
+    if (strstr(line, "[GPS RAW]") == NULL) {
+        ESP_LOGI(TAG, "RX: %s", line);
+    }
 
     // Call monitor callback if registered (does not interfere with line callback)
     if (monitor_callback) {
