@@ -32,10 +32,10 @@
         ]
       },
       "osx": {
-        "command": "bash",
+        "command": "zsh",
         "args": [
-          "-lc",
-          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv build"
+          "-c",
+          "source \"${config:idf.espIdfPath}/export.sh\" && idf.py -B build-adv -DBOARD=adv build"
         ]
       },
       "group": "build",
@@ -72,10 +72,10 @@
         ]
       },
       "osx": {
-        "command": "bash",
+        "command": "zsh",
         "args": [
-          "-lc",
-          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 build"
+          "-c",
+          "source \"${config:idf.espIdfPath}/export.sh\" && idf.py -B build-k132 -DBOARD=k132 build"
         ]
       },
       "group": "build",
@@ -105,10 +105,10 @@
         ]
       },
       "osx": {
-        "command": "bash",
+        "command": "zsh",
         "args": [
-          "-lc",
-          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} flash"
+          "-c",
+          "source \"${config:idf.espIdfPath}/export.sh\" && idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} flash"
         ]
       },
       "group": "build",
@@ -138,10 +138,10 @@
         ]
       },
       "osx": {
-        "command": "bash",
+        "command": "zsh",
         "args": [
-          "-lc",
-          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} flash"
+          "-c",
+          "source \"${config:idf.espIdfPath}/export.sh\" && idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} flash"
         ]
       },
       "group": "build",
@@ -178,10 +178,10 @@
         ]
       },
       "osx": {
-        "command": "bash",
+        "command": "zsh",
         "args": [
-          "-lc",
-          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv fullclean"
+          "-c",
+          "source \"${config:idf.espIdfPath}/export.sh\" && idf.py -B build-adv -DBOARD=adv fullclean"
         ]
       },
       "group": "build",
@@ -229,10 +229,10 @@
         ]
       },
       "osx": {
-        "command": "bash",
+        "command": "zsh",
         "args": [
-          "-lc",
-          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 fullclean"
+          "-c",
+          "source \"${config:idf.espIdfPath}/export.sh\" && idf.py -B build-k132 -DBOARD=k132 fullclean"
         ]
       },
       "group": "build",
@@ -273,10 +273,10 @@
         ]
       },
       "osx": {
-        "command": "bash",
+        "command": "zsh",
         "args": [
-          "-lc",
-          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} monitor"
+          "-c",
+          "source \"${config:idf.espIdfPath}/export.sh\" && idf.py -B build-adv -DBOARD=adv -p ${config:idf.port} monitor"
         ]
       },
       "group": "build",
@@ -306,10 +306,10 @@
         ]
       },
       "osx": {
-        "command": "bash",
+        "command": "zsh",
         "args": [
-          "-lc",
-          "source \"${config:idf.espIdfPath}/export.sh\" >/dev/null 2>&1; idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} monitor"
+          "-c",
+          "source \"${config:idf.espIdfPath}/export.sh\" && idf.py -B build-k132 -DBOARD=k132 -p ${config:idf.port} monitor"
         ]
       },
       "group": "build",

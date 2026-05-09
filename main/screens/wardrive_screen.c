@@ -361,13 +361,13 @@ static void on_tick(screen_t *self)
             wardrive_send(data, "gps_set external");
             snprintf(data->gps_overlay, sizeof(data->gps_overlay), "GPS set: external");
         }
+        if (data->is_cap_gps) {
+            cap_gps_init();
+        }
         wardrive_send(data, data->trace_enabled ? "start_wardrive_promisc_trace"
                                                 : "start_wardrive_promisc");
         data->wardrive_started = true;
         uart_set_wardrive_active(true);
-        if (data->is_cap_gps) {
-            cap_gps_init();
-        }
         buzzer_beep_attack();
         data->needs_redraw = true;
     }

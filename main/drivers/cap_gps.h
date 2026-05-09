@@ -42,4 +42,10 @@ bool cap_gps_get_position(double *lat, double *lon, double *alt, double *hdop);
  */
 int cap_gps_get_satellites(void);
 
+/**
+ * @brief Check if any NMEA data has been received recently
+ * @return true if NMEA sentence received within last 5 seconds
+ */
+bool cap_gps_is_receiving(void);
+
 #endif // CAP_GPS_H
