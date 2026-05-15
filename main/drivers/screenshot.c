@@ -13,6 +13,7 @@
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
+#include "driver/gpio.h"
 #include <string.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -24,6 +25,25 @@ static const char *TAG = "SCREENSHOT";
 #define SD_PIN_MOSI     14
 #define SD_PIN_CLK      40
 #define SD_PIN_CS       12
+
+// Cap LoRa-1262 SX1262 shares GPIO14 (NSS) and GPIO39 (MISO) with the SD SPI bus.
+// Hold SX1262 in hardware reset and NSS high before SD init so it never drives MISO.
+#define LORA_CAP_RESET_PIN  5   // Active low — LOW = chip in reset
+#define LORA_CAP_NSS_PIN    14  // Same as SD MOSI; keep HIGH so SX1262 stays deselected
+
+static void lora_cap_hold_reset(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << LORA_CAP_RESET_PIN) | (1ULL << LORA_CAP_NSS_PIN),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    gpio_set_level(LORA_CAP_RESET_PIN, 0); // hold SX1262 in reset
+    gpio_set_level(LORA_CAP_NSS_PIN, 1);   // NSS high = deselected
+}
 
 // SD card mount point
 #define MOUNT_POINT     "/sdcard"
@@ -92,9 +112,17 @@ static void find_next_screenshot_number(void)
 esp_err_t screenshot_init(void)
 {
     ESP_LOGI(TAG, "Initializing screenshot module...");
-    ESP_LOGI(TAG, "SD pins: MISO=%d, MOSI=%d, CLK=%d, CS=%d", 
+    ESP_LOGI(TAG, "SD pins: MISO=%d, MOSI=%d, CLK=%d, CS=%d",
              SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CLK, SD_PIN_CS);
-    
+
+    // Cap LoRa-1262: SX1262 shares GPIO14 (its NSS) with SD MOSI and GPIO39 (MISO).
+    // Assert hardware reset so SX1262 never drives MISO during SD operations.
+    // Then wait for the SPI lines to settle (LoRa CAP cable adds capacitance).
+    lora_cap_hold_reset();
+    ESP_LOGI(TAG, "LoRa CAP SX1262 held in reset (GPIO%d=0, GPIO%d=1)",
+             LORA_CAP_RESET_PIN, LORA_CAP_NSS_PIN);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
     // Initialize SPI bus for SD card
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = SD_PIN_MOSI,
@@ -124,14 +152,22 @@ esp_err_t screenshot_init(void)
     
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SD_SPI_HOST;
+    // Cap LoRa-1262 cable adds capacitance to shared SPI lines — lower speed
+    // prevents CRC errors during SD card initialization.
+    host.max_freq_khz = 4000;
     
-    ret = esp_vfs_fat_sdspi_mount(MOUNT_POINT, &host, &slot_config, &mount_config, &card);
-    if (ret != ESP_OK) {
-        if (ret == ESP_FAIL) {
-            ESP_LOGW(TAG, "Failed to mount SD card filesystem");
-        } else {
-            ESP_LOGW(TAG, "Failed to initialize SD card: %s", esp_err_to_name(ret));
+    // Retry mount a few times — SD cards sometimes need time to power up
+    #define SD_MOUNT_RETRIES 3
+    for (int attempt = 1; attempt <= SD_MOUNT_RETRIES; attempt++) {
+        ret = esp_vfs_fat_sdspi_mount(MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+        if (ret == ESP_OK) break;
+        ESP_LOGW(TAG, "SD mount attempt %d/%d failed: %s", attempt, SD_MOUNT_RETRIES, esp_err_to_name(ret));
+        if (attempt < SD_MOUNT_RETRIES) {
+            vTaskDelay(pdMS_TO_TICKS(300));
         }
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to initialize SD card: %s", esp_err_to_name(ret));
         spi_bus_free(SD_SPI_HOST);
         return ret;
     }

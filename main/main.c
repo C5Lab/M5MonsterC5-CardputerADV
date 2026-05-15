@@ -16,7 +16,6 @@
 #include "uart_handler.h"
 #include "screen_manager.h"
 #include "home_screen.h"
-#include "screenshot.h"
 #include "battery.h"
 #include "settings.h"
 #include "buzzer.h"
@@ -24,18 +23,15 @@
 
 #include "version.h"
 
-// Screen timeout is now configurable via Settings (stored in NVS)
-
 static const char *TAG = "MAIN";
 
 static volatile bool board_sd_missing = false;
 static volatile bool board_sd_check_pending = false;
 static volatile bool board_sd_ok_received = false;
 static int64_t board_sd_check_start_ms = 0;
-static bool board_sd_popup_shown = false;
 
-#define SD_CHECK_TIMEOUT_MS   3000
-#define SD_CHECK_RETRIES      2
+#define SD_CHECK_TIMEOUT_MS    3000
+#define SD_CHECK_RETRIES       2
 #define SD_CHECK_BOOT_DELAY_MS 1000
 
 bool is_board_sd_missing(void)
@@ -49,7 +45,6 @@ static void uart_sd_check_line_callback(const char *line, void *user_data)
     if (!line || !board_sd_check_pending) {
         return;
     }
-
     if (strcmp(line, "SD_OK") == 0) {
         board_sd_ok_received = true;
         board_sd_check_pending = false;
@@ -59,270 +54,221 @@ static void uart_sd_check_line_callback(const char *line, void *user_data)
     }
 }
 
+// ─── Boot screen ─────────────────────────────────────────────────────────────
+
+typedef enum {
+    BSTATE_PENDING = 0,
+    BSTATE_RUNNING,
+    BSTATE_OK,
+    BSTATE_WARN,
+} boot_state_t;
+
+typedef struct {
+    const char  *label;
+    boot_state_t state;
+    char         detail[40];
+} boot_step_t;
+
+#define BOOT_STEPS 2
+static boot_step_t s_steps[BOOT_STEPS] = {
+    { "1/2  Booting",        BSTATE_PENDING, "" },
+    { "2/2  Monster Grove",  BSTATE_PENDING, "" },
+};
+
+#define BOOT_ROW_START  2   // grid row where first step is drawn
+#define FONT_H          16  // matches font8x16
+
+static void boot_draw_step(int i)
+{
+    const char *icon;
+    uint16_t    color;
+    switch (s_steps[i].state) {
+        case BSTATE_OK:      icon = "[OK]"; color = UI_COLOR_TITLE;  break;
+        case BSTATE_WARN:    icon = "[!!]"; color = COLOR_YELLOW;    break;
+        case BSTATE_RUNNING: icon = "[..]"; color = UI_COLOR_TEXT;   break;
+        default:             icon = "[  ]"; color = UI_COLOR_DIMMED; break;
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%s %s", icon, s_steps[i].label);
+
+    int y = (BOOT_ROW_START + i) * FONT_H;
+    display_fill_rect(0, y, DISPLAY_WIDTH, FONT_H, UI_COLOR_BG);
+    ui_print(0, BOOT_ROW_START + i, buf, color);
+}
+
+// Draw the full boot screen once — called only at startup.
+static void boot_screen_init(void)
+{
+    ui_clear();
+    ui_draw_title("  M5MONSTER  ADV  ");
+    for (int i = 0; i < BOOT_STEPS; i++) {
+        boot_draw_step(i);
+    }
+    ui_draw_status("");
+    display_flush();
+}
+
+// Update a single step without touching the title or other rows.
+static void boot_set(int step, boot_state_t state, const char *detail)
+{
+    s_steps[step].state = state;
+    if (detail) {
+        strncpy(s_steps[step].detail, detail, sizeof(s_steps[step].detail) - 1);
+        s_steps[step].detail[sizeof(s_steps[step].detail) - 1] = '\0';
+    }
+    boot_draw_step(step);
+
+    // Show detail of the last active step
+    const char *status_text = "";
+    for (int i = BOOT_STEPS - 1; i >= 0; i--) {
+        if (s_steps[i].state != BSTATE_PENDING && s_steps[i].detail[0]) {
+            status_text = s_steps[i].detail;
+            break;
+        }
+    }
+    ui_draw_status(status_text);
+    display_flush();
+}
+
+// ─── app_main ────────────────────────────────────────────────────────────────
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Cardputer-ADV WiFi Attack Application Starting...");
 
-    // Initialize settings (NVS)
-    ESP_LOGI(TAG, "Initializing settings...");
-    esp_err_t ret = settings_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Settings initialization failed!");
+    // Settings and display must succeed before we can show anything
+    if (settings_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Settings init failed");
         return;
     }
-    ESP_LOGI(TAG, "Settings initialized successfully");
-
-    // Initialize display
-    ESP_LOGI(TAG, "Initializing display...");
-    ret = display_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Display initialization failed!");
+    if (display_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Display init failed");
         return;
     }
-    ESP_LOGI(TAG, "Display initialized successfully");
-
-    // Apply saved brightness setting
     display_set_backlight(settings_get_screen_brightness());
 
-    // Initialize battery monitoring
-    ESP_LOGI(TAG, "Initializing battery monitoring...");
-    ret = battery_init();
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Battery monitoring initialization failed - battery indicator disabled");
-        // Continue anyway - battery monitoring is optional
-    } else {
-        ESP_LOGI(TAG, "Battery monitoring initialized successfully");
-    }
+    // Draw boot screen once — subsequent boot_set() calls update only changed rows
+    boot_screen_init();
 
-    // Initialize screenshot module (SD card)
-    ESP_LOGI(TAG, "Initializing screenshot module...");
-    ret = screenshot_init();
-    bool sd_card_missing = false;
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Screenshot module initialization failed - screenshots disabled");
-        sd_card_missing = true;
-        // Continue anyway - screenshots are optional
-    } else {
-        ESP_LOGI(TAG, "Screenshot module initialized successfully");
-    }
+    // ── Step 1: Booting ──────────────────────────────────────────────────────
+    boot_set(0, BSTATE_RUNNING, "Initializing...");
 
-    // Initialize keyboard
-    ESP_LOGI(TAG, "Initializing keyboard...");
-    ret = keyboard_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Keyboard initialization failed!");
+    battery_init(); // optional
+
+    if (keyboard_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Keyboard init failed");
         return;
     }
-    ESP_LOGI(TAG, "Keyboard initialized successfully");
 
-    // SD card warning popup (after keyboard init so ESC works)
-    if (sd_card_missing) {
-        ESP_LOGW(TAG, "SD card not detected, showing popup...");
-        ui_clear();
-        ui_show_message("Warning", "SD card not detected");
-        display_flush();
+    boot_set(0, BSTATE_OK, "");
 
-        // Wait up to 2 seconds or until ESC is pressed
-        for (int i = 0; i < 200; i++) {
-            keyboard_process();
-            if (keyboard_get_key() == KEY_ESC) {
-                ESP_LOGI(TAG, "SD card warning popup dismissed by user");
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
+    // ── Step 2: Monster Grove ────────────────────────────────────────────────
+    boot_set(1, BSTATE_RUNNING, "Searching... ESC to skip");
 
-        ui_clear();
-    }
-
-    // Initialize UART handler
-    ESP_LOGI(TAG, "Initializing UART handler...");
-    ret = uart_handler_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "UART handler initialization failed!");
+    if (uart_handler_init() != ESP_OK) {
+        ESP_LOGE(TAG, "UART handler init failed");
         return;
     }
-    ESP_LOGI(TAG, "UART handler initialized successfully");
     uart_register_monitor_callback(uart_sd_check_line_callback, NULL);
 
-    // Board detection - check if ESP32C5 board is connected
-    ESP_LOGI(TAG, "Checking for ESP32C5 board...");
     bool board_detected = uart_check_board_ping(500);
     bool popup_dismissed = false;
 
-    if (!board_detected) {
-        ESP_LOGW(TAG, "Board not detected, showing popup...");
-        
-        // Show popup
-        ui_clear();
-        ui_show_message("Warning", "Board not detected");
-        display_flush();
-        
-        // Retry loop - ping every 1s until board detected or ESC pressed
-        while (!board_detected && !popup_dismissed) {
-            // Check for ESC key to dismiss popup
-            // Poll keyboard for ~1 second in small intervals
-            for (int i = 0; i < 100 && !popup_dismissed; i++) {
-                keyboard_process();
-                key_code_t key = keyboard_get_key();
-                if (key == KEY_ESC) {
-                    popup_dismissed = true;
-                    ESP_LOGI(TAG, "Board detection popup dismissed by user");
-                    break;
-                }
-                vTaskDelay(pdMS_TO_TICKS(10));
+    // Retry until board found or user skips
+    while (!board_detected && !popup_dismissed) {
+        for (int i = 0; i < 100 && !popup_dismissed; i++) {
+            keyboard_process();
+            if (keyboard_get_key() == KEY_ESC) {
+                popup_dismissed = true;
             }
-            
-            // If not dismissed, try ping again
-            if (!popup_dismissed) {
-                board_detected = uart_check_board_ping(500);
-            }
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
-        
-        // Clear popup
-        ui_clear();
+        if (!popup_dismissed) {
+            board_detected = uart_check_board_ping(500);
+        }
     }
-    
-    if (board_detected) {
-        ESP_LOGI(TAG, "ESP32C5 board detected");
 
-        // Give Monster time to finish SD mount after responding to ping
-        ESP_LOGI(TAG, "Waiting %dms for Monster SD init...", SD_CHECK_BOOT_DELAY_MS);
+    if (!board_detected) {
+        // User pressed ESC — skip Grove check
+        boot_set(1, BSTATE_WARN, "Not detected (skipped)");
+    } else {
+        // Board found — now check its SD
+        boot_set(1, BSTATE_RUNNING, "Checking Monster SD...");
         vTaskDelay(pdMS_TO_TICKS(SD_CHECK_BOOT_DELAY_MS));
 
-        // Retry sd_status up to SD_CHECK_RETRIES times
         for (int attempt = 1; attempt <= SD_CHECK_RETRIES; attempt++) {
-            ESP_LOGI(TAG, "SD check attempt %d/%d...", attempt, SD_CHECK_RETRIES);
             board_sd_ok_received = false;
-            board_sd_missing = false;
+            board_sd_missing     = false;
             board_sd_check_pending = true;
             board_sd_check_start_ms = esp_timer_get_time() / 1000;
             uart_send_command("sd_status");
 
-            // Block-wait for response (up to SD_CHECK_TIMEOUT_MS per attempt)
             while (board_sd_check_pending) {
                 int64_t now_ms = esp_timer_get_time() / 1000;
                 if ((now_ms - board_sd_check_start_ms) > SD_CHECK_TIMEOUT_MS) {
                     board_sd_check_pending = false;
-                    ESP_LOGW(TAG, "SD check attempt %d timed out", attempt);
                 }
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
 
-            if (board_sd_ok_received) {
-                ESP_LOGI(TAG, "Monster SD OK on attempt %d", attempt);
-                break;
-            } else if (board_sd_missing) {
-                ESP_LOGW(TAG, "Monster SD missing confirmed on attempt %d", attempt);
-                break;
-            }
+            if (board_sd_ok_received || board_sd_missing) break;
 
-            // No response — retry after short pause (except on last attempt)
             if (attempt < SD_CHECK_RETRIES) {
-                ESP_LOGW(TAG, "No SD response, retrying in 500ms...");
                 vTaskDelay(pdMS_TO_TICKS(500));
             }
         }
 
-        if (!board_sd_ok_received && !board_sd_missing) {
-            ESP_LOGW(TAG, "Monster SD status unknown after all attempts");
+        if (board_sd_ok_received) {
+            boot_set(1, BSTATE_OK, "Monster SD ready");
+        } else if (board_sd_missing) {
+            boot_set(1, BSTATE_WARN, "Monster SD missing");
+        } else {
+            boot_set(1, BSTATE_WARN, "Monster SD unknown");
         }
-    } else {
-        ESP_LOGW(TAG, "Continuing without board detection");
     }
 
-    // Initialize buzzer
-    ESP_LOGI(TAG, "Initializing buzzer...");
-    ret = buzzer_init();
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Buzzer initialization failed - audio disabled");
-        // Continue anyway - buzzer is optional
-    } else {
-        ESP_LOGI(TAG, "Buzzer initialized successfully");
+    // Pause so user can read the boot results
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    // ── Finish boot ──────────────────────────────────────────────────────────
+    if (buzzer_init() != ESP_OK) {
+        ESP_LOGW(TAG, "Buzzer init failed - audio disabled");
     }
 
-    // Initialize screen manager
-    ESP_LOGI(TAG, "Initializing screen manager...");
     screen_manager_init();
-    ESP_LOGI(TAG, "Screen manager initialized successfully");
-
-    // Push home screen as the initial screen
-    ESP_LOGI(TAG, "Loading home screen...");
     screen_manager_push(home_screen_create, NULL);
 
     ESP_LOGI(TAG, "Application started successfully!");
 
-    // Main loop - process keyboard input and periodic screen updates
-    int tick_counter = 0;
-    bool screen_dimmed = false;
-    int64_t last_activity_time = esp_timer_get_time() / 1000;  // Convert to ms
-    
+    // Main loop
+    int     tick_counter      = 0;
+    bool    screen_dimmed     = false;
+    int64_t last_activity_time = esp_timer_get_time() / 1000;
+
     while (1) {
         keyboard_process();
-        
-        // Check for any key activity
+
         key_code_t key = keyboard_get_key();
         if (key != KEY_NONE) {
-            // Reset activity timer on any keypress
             last_activity_time = esp_timer_get_time() / 1000;
-            
-            // Wake screen if dimmed
             if (screen_dimmed) {
                 display_set_backlight(settings_get_screen_brightness());
                 screen_dimmed = false;
-                ESP_LOGI(TAG, "Screen woken by keypress");
             }
         }
 
-        // SD card missing: show warning and allow ESC to continue
-        if (board_sd_missing && !board_sd_popup_shown) {
-            ESP_LOGW(TAG, "Board SD card not detected, showing popup...");
-            display_set_backlight(settings_get_screen_brightness());
-            ui_clear();
-            ui_show_message_tall("Warning",
-                            "SD missing in MonsterC5\n"
-                            "Insert SD and Off/On\n"
-                            "Press Esc to skip\n"
-                            "Some functions limited");
-            display_flush();
-
-            // Block UI input until ESC (no arrow/menu handling under popup)
-            keyboard_set_callback_enabled(false);
-            while (true) {
-                keyboard_process();
-                bool esc_pressed = false;
-                key_code_t key = KEY_NONE;
-                while ((key = keyboard_get_key()) != KEY_NONE) {
-                    if (key == KEY_ESC) {
-                        esc_pressed = true;
-                    }
-                }
-                if (esc_pressed) {
-                    break;
-                }
-                vTaskDelay(pdMS_TO_TICKS(20));
-            }
-            keyboard_set_callback_enabled(true);
-            ui_clear();
-            screen_manager_redraw();
-            board_sd_popup_shown = true;
-        }
-
-        // Check for screen timeout (0 = stays on, never dims)
         uint32_t timeout = settings_get_screen_timeout_ms();
-        int64_t now = esp_timer_get_time() / 1000;
+        int64_t  now     = esp_timer_get_time() / 1000;
         if (!screen_dimmed && timeout > 0 && (now - last_activity_time) > timeout) {
             display_set_backlight(0);
             screen_dimmed = true;
-            ESP_LOGI(TAG, "Screen dimmed due to inactivity");
         }
-        
-        // Call screen tick every 500ms (50 * 10ms) for responsive UI updates
+
         if (++tick_counter >= 50) {
             tick_counter = 0;
             screen_manager_tick();
         }
-        
+
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
