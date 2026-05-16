@@ -130,6 +130,32 @@ static void boot_set(int step, boot_state_t state, const char *detail)
     display_flush();
 }
 
+static void boot_wait_for_monster_sd_continue(void)
+{
+    ESP_LOGW(TAG, "Monster SD card not detected, waiting for user confirmation");
+
+    display_set_backlight(settings_get_screen_brightness());
+    ui_clear();
+    ui_show_message_tall("Warning",
+                         "No SD in MonsterC5\n"
+                         "Insert SD and reboot\n"
+                         "Press Enter to continue\n"
+                         "Some functions limited");
+    display_flush();
+
+    while (true) {
+        keyboard_process();
+        key_code_t key = keyboard_get_key();
+        if (key == KEY_ENTER || key == KEY_SPACE || key == KEY_ESC) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    ui_clear();
+    display_flush();
+}
+
 // ─── app_main ────────────────────────────────────────────────────────────────
 
 void app_main(void)
@@ -222,6 +248,7 @@ void app_main(void)
             boot_set(1, BSTATE_OK, "Monster SD ready");
         } else if (board_sd_missing) {
             boot_set(1, BSTATE_WARN, "Monster SD missing");
+            boot_wait_for_monster_sd_continue();
         } else {
             boot_set(1, BSTATE_WARN, "Monster SD unknown");
         }
