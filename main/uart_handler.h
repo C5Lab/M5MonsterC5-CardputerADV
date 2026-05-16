@@ -133,6 +133,21 @@ bool uart_is_wardrive_active(void);
  */
 void uart_set_wardrive_active(bool active);
 
+/**
+ * @brief Probe for a Sub-GHz module on the connected JanOS device.
+ *        Sends `subghz_status` and waits for a line that starts with
+ *        `[SUBGHZ_STATUS]`. Caches the result for uart_is_subghz_available().
+ * @param timeout_ms Timeout in milliseconds to wait for response
+ * @return true if a [SUBGHZ_STATUS] line was seen within the timeout
+ */
+bool uart_check_subghz_available(int timeout_ms);
+
+/**
+ * @brief Return the cached Sub-GHz availability flag set by the boot probe.
+ * @return true if uart_check_subghz_available() previously succeeded
+ */
+bool uart_is_subghz_available(void);
+
 #endif // UART_HANDLER_H
 
 
