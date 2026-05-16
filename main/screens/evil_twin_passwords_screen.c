@@ -20,6 +20,7 @@ static const char *TAG = "EVIL_TWIN_PASS";
 #define MAX_ENTRIES     32
 #define MAX_SSID_LEN    33
 #define MAX_PASS_LEN    64
+#define MAX_STATUS_LEN  40
 #define VISIBLE_ITEMS   6
 
 // Password entry
@@ -38,6 +39,7 @@ typedef struct {
     bool needs_redraw;
     bool first_draw_done;
     int ticks_since_first_draw;  // Block redraws shortly after first render
+    char status_message[MAX_STATUS_LEN];
 } evil_twin_passwords_data_t;
 
 // Forward declaration
@@ -66,6 +68,24 @@ static bool is_skip_line(const char *line)
     if (*p == '>') return true;
     
     return false;
+}
+
+static bool is_bare_prompt_line(const char *line)
+{
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '>') return false;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    return *p == '\0';
+}
+
+static bool is_sd_error_line(const char *line)
+{
+    return strstr(line, "Failed to initialize SD card") != NULL ||
+           strstr(line, "Make sure SD card") != NULL ||
+           strstr(line, "Command returned non-zero error code") != NULL ||
+           strstr(line, "ESP_ERR_INVALID_RESPONSE") != NULL;
 }
 
 /**
@@ -111,14 +131,37 @@ static void uart_line_callback(const char *line, void *user_data)
     
     // Skip empty lines
     if (strlen(line) == 0) return;
+
+    if (is_bare_prompt_line(line)) {
+        data->loading = false;
+        if (data->first_draw_done) {
+            data->needs_redraw = true;
+        }
+        return;
+    }
     
     // Skip log/system lines
     if (is_skip_line(line)) return;
+
+    if (is_sd_error_line(line)) {
+        data->loading = false;
+        snprintf(data->status_message, sizeof(data->status_message), "SD card not available");
+        if (data->first_draw_done) {
+            data->needs_redraw = true;
+        }
+        return;
+    }
     
-    // Check for "No" or "no" messages (no data)
-    if (strstr(line, "No ") != NULL || strstr(line, "no ") != NULL || 
+    // Check for missing file or no-data messages
+    if (strstr(line, "not found") != NULL || strstr(line, "Not found") != NULL ||
+        strstr(line, "No ") != NULL || strstr(line, "no ") != NULL || 
         strstr(line, "empty") != NULL || strstr(line, "Empty") != NULL) {
         data->loading = false;
+        if (strstr(line, "not found") != NULL || strstr(line, "Not found") != NULL) {
+            snprintf(data->status_message, sizeof(data->status_message), "passwords file not found");
+        } else {
+            data->status_message[0] = '\0';
+        }
         // Only trigger redraw if first draw was already done (avoid double draw on initial load)
         if (data->first_draw_done) {
             data->needs_redraw = true;
@@ -157,7 +200,11 @@ static void draw_screen(screen_t *self)
     if (data->loading) {
         ui_print_center(3, "Loading...", UI_COLOR_DIMMED);
     } else if (data->entry_count == 0) {
-        ui_print_center(3, "No passwords found", UI_COLOR_DIMMED);
+        if (data->status_message[0] != '\0') {
+            ui_print_center(3, data->status_message, UI_COLOR_DIMMED);
+        } else {
+            ui_print_center(3, "No passwords found", UI_COLOR_DIMMED);
+        }
     } else {
         // Draw visible entries
         int start_row = 1;

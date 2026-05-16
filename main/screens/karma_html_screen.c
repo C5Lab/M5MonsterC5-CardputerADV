@@ -18,6 +18,7 @@ static const char *TAG = "KARMA_HTML";
 // Maximum HTML files
 #define MAX_FILES       32
 #define MAX_FILENAME    32
+#define MAX_STATUS_LEN  40
 
 // Screen user data
 typedef struct {
@@ -30,6 +31,7 @@ typedef struct {
     bool loading;
     bool needs_redraw;
     screen_t *self;
+    char status_message[MAX_STATUS_LEN];
 } karma_html_data_t;
 
 // Forward declaration
@@ -53,6 +55,37 @@ static bool is_esp_log_line(const char *line)
     return false;
 }
 
+static bool is_bare_prompt_line(const char *line)
+{
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '>') return false;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    return *p == '\0';
+}
+
+static bool is_sd_error_line(const char *line)
+{
+    return strstr(line, "Failed to initialize SD card") != NULL ||
+           strstr(line, "Make sure SD card") != NULL ||
+           strstr(line, "Command returned non-zero error code") != NULL ||
+           strstr(line, "ESP_ERR_INVALID_RESPONSE") != NULL;
+}
+
+static bool is_no_html_line(const char *line)
+{
+    return strstr(line, "No HTML") != NULL ||
+           strstr(line, "no HTML") != NULL ||
+           strstr(line, "No html") != NULL ||
+           strstr(line, "no html") != NULL ||
+           strstr(line, "not found") != NULL ||
+           strstr(line, "Not found") != NULL ||
+           strstr(line, "empty") != NULL ||
+           strstr(line, "Empty") != NULL ||
+           strstr(line, "No such file") != NULL;
+}
+
 /**
  * @brief UART line callback for parsing list_sd output
  * Format: "1 PLAY.html", "2 SocialMedium.html", etc.
@@ -64,9 +97,29 @@ static void uart_line_callback(const char *line, void *user_data)
     
     // Skip empty lines
     if (strlen(line) == 0) return;
+
+    if (is_bare_prompt_line(line)) {
+        data->loading = false;
+        data->needs_redraw = true;
+        return;
+    }
     
     // Skip ESP log lines
     if (is_esp_log_line(line)) return;
+
+    if (is_sd_error_line(line)) {
+        data->loading = false;
+        snprintf(data->status_message, sizeof(data->status_message), "SD card not available");
+        data->needs_redraw = true;
+        return;
+    }
+
+    if (is_no_html_line(line)) {
+        data->loading = false;
+        data->status_message[0] = '\0';
+        data->needs_redraw = true;
+        return;
+    }
     
     // Skip "HTML files found" header
     if (strstr(line, "HTML files") != NULL) {
@@ -123,7 +176,11 @@ static void draw_screen(screen_t *self)
     if (data->loading) {
         ui_print_center(3, "Loading files...", UI_COLOR_DIMMED);
     } else if (data->file_count == 0) {
-        ui_print_center(3, "No HTML files found", UI_COLOR_DIMMED);
+        if (data->status_message[0] != '\0') {
+            ui_print_center(3, data->status_message, UI_COLOR_DIMMED);
+        } else {
+            ui_print_center(3, "No HTML files found", UI_COLOR_DIMMED);
+        }
     } else {
         // Draw visible files as menu items
         int visible_rows = 6;

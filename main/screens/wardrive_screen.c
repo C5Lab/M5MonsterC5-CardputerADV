@@ -69,6 +69,7 @@ typedef struct {
     bool stop_confirm_yes;
     int cap_tick_counter;
     bool needs_redraw;
+    bool ui_initialized;
 
     esp_timer_handle_t refresh_timer;
     screen_t *self;
@@ -383,15 +384,26 @@ static void on_resume(screen_t *self)
     wardrive_data_t *data = (wardrive_data_t *)self->user_data;
     if (!data) return;
     uart_register_line_callback(uart_line_callback, data);
+    data->ui_initialized = false; // force full redraw after returning from sub-screen
     data->needs_redraw = true;
 }
+
+#define WD_CONTENT_Y_START  19
+#define WD_CONTENT_Y_END    117
+#define WD_CONTENT_HEIGHT   (WD_CONTENT_Y_END - WD_CONTENT_Y_START)
 
 static void draw_screen(screen_t *self)
 {
     wardrive_data_t *data = (wardrive_data_t *)self->user_data;
 
-    ui_clear();
-    ui_draw_title("Wardrive");
+    if (!data->ui_initialized) {
+        ui_clear();
+        ui_draw_title("Wardrive");
+        data->ui_initialized = true;
+    }
+
+    // Clear content area only
+    display_fill_rect(0, WD_CONTENT_Y_START, DISPLAY_WIDTH, WD_CONTENT_HEIGHT, UI_COLOR_BG);
 
     if (data->no_sd_overlay) {
         ui_print_center(2, "No SD card!", UI_COLOR_HIGHLIGHT);

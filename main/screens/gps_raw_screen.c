@@ -47,7 +47,12 @@ typedef struct {
     bool needs_redraw;
     bool is_cap_gps;
     bool cap_inited;
+    bool ui_initialized;
 } gps_raw_data_t;
+
+#define CONTENT_Y_START  19   // just below title bar border
+#define CONTENT_Y_END    117  // just above status bar
+#define CONTENT_HEIGHT   (CONTENT_Y_END - CONTENT_Y_START)
 
 static void draw_screen(screen_t *self);
 
@@ -354,11 +359,16 @@ static void draw_screen(screen_t *self)
 {
     gps_raw_data_t *data = (gps_raw_data_t *)self->user_data;
 
-    ui_clear();
+    if (!data->ui_initialized) {
+        ui_clear();
+        const char *title = data->is_cap_gps ? "CAP GPS" : "GPS Read";
+        ui_draw_title(title);
+        ui_draw_status("ESC: Stop & Exit");
+        data->ui_initialized = true;
+    }
 
-    // Draw title
-    const char *title = data->is_cap_gps ? "CAP GPS" : "GPS Read";
-    ui_draw_title(title);
+    // Clear only content area — title and status bar stay untouched
+    display_fill_rect(0, CONTENT_Y_START, DISPLAY_WIDTH, CONTENT_HEIGHT, UI_COLOR_BG);
 
     gps_status_t status = compute_status(data);
 
@@ -395,8 +405,6 @@ static void draw_screen(screen_t *self)
         }
     }
 
-    // Draw status bar
-    ui_draw_status("ESC: Stop & Exit");
 }
 
 static void on_key(screen_t *self, key_code_t key)
