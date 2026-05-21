@@ -361,6 +361,30 @@ static void draw_list_view(screen_t *self)
     clear_row_dirty(data);
 }
 
+/* Action menu rows 3..6 = Rename / Delete / Transmit / Cancel. */
+#define SD_ACTION_ROW_BASE 3
+
+static const char *sd_action_label(int idx)
+{
+    switch (idx) {
+        case SD_ACTION_RENAME:   return "Rename";
+        case SD_ACTION_DELETE:   return "Delete";
+        case SD_ACTION_TRANSMIT: return "Transmit";
+        case SD_ACTION_CANCEL:   return "Cancel";
+        default:                 return "";
+    }
+}
+
+static void redraw_action_row(subghz_sd_data_t *data, int action_idx)
+{
+    if (action_idx < 0 || action_idx >= SD_ACTION_COUNT) return;
+    int ui_row = SD_ACTION_ROW_BASE + action_idx;
+    int y = ui_row * 16;
+    display_fill_rect(0, y, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+    ui_draw_menu_item(ui_row, sd_action_label(action_idx),
+                      data->action_choice == action_idx, false, false);
+}
+
 static void draw_actions_view(screen_t *self)
 {
     subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
@@ -382,12 +406,27 @@ static void draw_actions_view(screen_t *self)
         ui_print_center(2, l1, UI_COLOR_HIGHLIGHT);
     }
 
-    ui_draw_menu_item(3, "Rename",   data->action_choice == SD_ACTION_RENAME,   false, false);
-    ui_draw_menu_item(4, "Delete",   data->action_choice == SD_ACTION_DELETE,   false, false);
-    ui_draw_menu_item(5, "Transmit", data->action_choice == SD_ACTION_TRANSMIT, false, false);
-    ui_draw_menu_item(6, "Cancel",   data->action_choice == SD_ACTION_CANCEL,   false, false);
+    for (int i = 0; i < SD_ACTION_COUNT; i++) redraw_action_row(data, i);
 
     ui_draw_status("UP/DN ENT:Pick ESC:Cancel");
+}
+
+/* Confirm rows 5..6 = Yes / Cancel for both delete-one and clear-all flows. */
+#define SD_CONFIRM_ROW_BASE 5
+
+static const char *sd_confirm_label(int idx)
+{
+    return (idx == 0) ? "Yes" : "Cancel";
+}
+
+static void redraw_confirm_row(subghz_sd_data_t *data, int idx)
+{
+    if (idx < 0 || idx > 1) return;
+    int ui_row = SD_CONFIRM_ROW_BASE + idx;
+    int y = ui_row * 16;
+    display_fill_rect(0, y, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+    ui_draw_menu_item(ui_row, sd_confirm_label(idx),
+                      data->confirm_choice == idx, false, false);
 }
 
 static void draw_confirm_view(screen_t *self)
@@ -417,8 +456,8 @@ static void draw_confirm_view(screen_t *self)
         ui_print_center(3, "on the SD card?", UI_COLOR_HIGHLIGHT);
     }
 
-    ui_draw_menu_item(5, "Yes",    data->confirm_choice == 0, false, false);
-    ui_draw_menu_item(6, "Cancel", data->confirm_choice == 1, false, false);
+    redraw_confirm_row(data, 0);
+    redraw_confirm_row(data, 1);
 
     ui_draw_status("UP/DN ENTER:Confirm ESC:Cancel");
 }
@@ -659,16 +698,21 @@ static void on_key_actions(screen_t *self, key_code_t key)
     subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
 
     switch (key) {
-        case KEY_UP:
-            data->action_choice = (data->action_choice + SD_ACTION_COUNT - 1)
-                                   % SD_ACTION_COUNT;
-            draw_actions_view(self);
+        case KEY_UP: {
+            int old = data->action_choice;
+            data->action_choice = (old + SD_ACTION_COUNT - 1) % SD_ACTION_COUNT;
+            redraw_action_row(data, old);
+            redraw_action_row(data, data->action_choice);
             break;
+        }
 
-        case KEY_DOWN:
-            data->action_choice = (data->action_choice + 1) % SD_ACTION_COUNT;
-            draw_actions_view(self);
+        case KEY_DOWN: {
+            int old = data->action_choice;
+            data->action_choice = (old + 1) % SD_ACTION_COUNT;
+            redraw_action_row(data, old);
+            redraw_action_row(data, data->action_choice);
             break;
+        }
 
         case KEY_ENTER:
         case KEY_SPACE:
@@ -710,10 +754,13 @@ static void on_key_confirm(screen_t *self, key_code_t key)
 
     switch (key) {
         case KEY_UP:
-        case KEY_DOWN:
-            data->confirm_choice = data->confirm_choice ? 0 : 1;
-            draw_confirm_view(self);
+        case KEY_DOWN: {
+            int old = data->confirm_choice;
+            data->confirm_choice = old ? 0 : 1;
+            redraw_confirm_row(data, old);
+            redraw_confirm_row(data, data->confirm_choice);
             break;
+        }
 
         case KEY_ENTER:
         case KEY_SPACE:
