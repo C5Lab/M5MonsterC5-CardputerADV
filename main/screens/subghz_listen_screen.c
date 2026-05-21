@@ -7,10 +7,22 @@
  *   subghz_rx           (or subghz_rx raw)
  *   subghz_stop         on exit/stop
  *
+ * Listen auto-starts on entry. A bright "LIVE 433.92 Dec" badge (green) on
+ * the status row makes the running state obvious; when paused the same row
+ * shows "STOPPED 433.92 Dec" in red and the body shows a centred
+ * "Press SPACE to start" hint when the list is empty.
+ *
  * Captured signals live in the firmware mem cache. ENTER on a selected row
  * opens a per-item action menu (Save to SD / Transmit / Cancel); SPACE
  * toggles capture start/stop. ESC with captures in the list shows a
  * leave-warning confirm (signals in mem are lost on reboot or subghz_clear).
+ *
+ * Repaint model: the screen runs a per-row "dirty" model — async UART events
+ * (RSSI, RX, FA, …) only ever set the minimal dirty flags they need. on_tick
+ * dispatches status / row-range / window repaints without ever clearing the
+ * whole screen. Matches the wifi network_list_screen idiom: scroll never
+ * moves by one row, it page-jumps by VISIBLE_ITEMS so per-row navigation
+ * always uses the two-row redraw.
  */
 
 #include "subghz_listen_screen.h"
@@ -31,6 +43,9 @@ static const char *TAG = "SUBGHZ_LISTEN";
 #define VISIBLE_ITEMS       5
 #define SUBGHZ_MAX_SIGNALS  128
 #define TOAST_BUF_LEN       32
+
+#define LISTEN_COLOR_LIVE     UI_COLOR_HIGHLIGHT
+#define LISTEN_COLOR_STOPPED  RGB565(255, 80, 80)
 
 typedef enum {
     LISTEN_VIEW_LIST = 0,
@@ -69,12 +84,17 @@ typedef struct {
     int   selected_index;
     int   scroll_offset;
     bool  follow_latest;
-    bool  needs_redraw;
-    int   prev_count_drawn;
+
+    /* Per-row dirty model. Set by async events; cleared by on_tick. */
+    bool  status_dirty;
+    bool  window_dirty;
+    int   row_dirty_from;       /* -1 = none */
+    int   row_dirty_to;         /* inclusive */
+    bool  empty_hint_drawn;     /* tracks whether the centred placeholder is painted */
 
     listen_view_t view;
-    int  action_choice;     /* 0=Save, 1=TX, 2=Cancel */
-    int  confirm_choice;    /* 0=Cancel, 1=Leave anyway */
+    int  action_choice;         /* 0=Save, 1=TX, 2=Cancel */
+    int  confirm_choice;        /* 0=Cancel, 1=Leave anyway */
     bool was_running_pre_menu;
 
     char toast_text[TOAST_BUF_LEN];
@@ -86,7 +106,9 @@ typedef struct {
 /* Active screen reference for UART line callback (line_callback is global). */
 static subghz_listen_data_t *s_current = NULL;
 
-/* Optional pre-fill from Scanner. */
+/* Optional pre-fill from Scanner. The autostart flag is no longer consulted —
+ * Listen always starts on entry — but the field is kept so the public API
+ * stays source-compatible. */
 static float s_pending_freq = 0.0f;
 static bool  s_pending_autostart = false;
 
@@ -97,8 +119,22 @@ static void draw_leave_confirm_view(screen_t *self);
 static void redraw_signal_row(subghz_listen_data_t *data, int sig_idx);
 static void redraw_status_row(subghz_listen_data_t *data);
 static void redraw_list_window(subghz_listen_data_t *data);
+static void redraw_empty_hint(subghz_listen_data_t *data);
 static void start_rx(screen_t *self);
 static void stop_rx(screen_t *self);
+
+static void mark_row_dirty(subghz_listen_data_t *d, int idx)
+{
+    if (idx < 0) return;
+    if (d->row_dirty_from < 0 || idx < d->row_dirty_from) d->row_dirty_from = idx;
+    if (idx > d->row_dirty_to) d->row_dirty_to = idx;
+}
+
+static void clear_row_dirty(subghz_listen_data_t *d)
+{
+    d->row_dirty_from = -1;
+    d->row_dirty_to = -1;
+}
 
 static void fill_signal(subghz_signal_t *dst, const subghz_signal_info_t *src)
 {
@@ -114,32 +150,39 @@ static void fill_signal(subghz_signal_t *dst, const subghz_signal_info_t *src)
     snprintf(dst->name, sizeof(dst->name), "%s", src->name[0] ? src->name : "");
 }
 
-static bool merge_duplicate_signal_locked(subghz_listen_data_t *data,
-                                          const subghz_signal_info_t *src)
+/* Returns the index of the merged-into row on success, -1 if no merge. */
+static int merge_duplicate_signal_locked(subghz_listen_data_t *data,
+                                         const subghz_signal_info_t *src)
 {
-    if (!src || !src->is_duplicate || data->sig_count == 0) return false;
-    subghz_signal_t *last = &data->sigs[data->sig_count - 1];
-    if (last->is_raw) return false;
+    if (!src || !src->is_duplicate || data->sig_count == 0) return -1;
+    int last_idx = data->sig_count - 1;
+    subghz_signal_t *last = &data->sigs[last_idx];
+    if (last->is_raw) return -1;
 
     bool match_idx = (src->idx > 0 && last->idx == src->idx);
     bool match_fields = (strcmp(last->type, src->type) == 0 &&
                          strcmp(last->serial, src->serial) == 0 &&
                          last->btn == src->btn);
-    if (!match_idx && !match_fields) return false;
+    if (!match_idx && !match_fields) return -1;
 
     if (src->cnt > 0) last->cnt = src->cnt;
-    return true;
+    return last_idx;
 }
 
-static void append_signal_locked(subghz_listen_data_t *data,
-                                 const subghz_signal_info_t *src)
+/* Returns the index of the newly appended row, or -1 on cap overflow drop. */
+static int append_signal_locked(subghz_listen_data_t *data,
+                                const subghz_signal_info_t *src)
 {
+    bool shifted = false;
     if (data->sig_count >= SUBGHZ_MAX_SIGNALS) {
         memmove(&data->sigs[0], &data->sigs[1],
                 sizeof(data->sigs[0]) * (SUBGHZ_MAX_SIGNALS - 1));
         data->sig_count--;
+        shifted = true;
     }
+    int new_idx = data->sig_count;
     fill_signal(&data->sigs[data->sig_count++], src);
+    return shifted ? -2 : new_idx;
 }
 
 static void uart_line_cb(const char *line, void *user_data)
@@ -159,12 +202,36 @@ static void uart_line_cb(const char *line, void *user_data)
     if (data->raw_mode && parsed.kind == SUBGHZ_SIGNAL_KIND_RX_DUP) return;
 
     xSemaphoreTake(data->sig_mtx, portMAX_DELAY);
-    if (!merge_duplicate_signal_locked(data, &parsed)) {
-        append_signal_locked(data, &parsed);
+    int merge_idx = merge_duplicate_signal_locked(data, &parsed);
+    int appended = -1;
+    if (merge_idx < 0) {
+        appended = append_signal_locked(data, &parsed);
+    }
+    int total = data->sig_count;
+    bool was_follow = data->follow_latest;
+    int new_scroll = data->scroll_offset;
+    if (was_follow && total > 0) {
+        new_scroll = total - VISIBLE_ITEMS;
+        if (new_scroll < 0) new_scroll = 0;
+    }
+    bool scroll_changed = (new_scroll != data->scroll_offset);
+    bool ring_shifted = (appended == -2);
+    if (was_follow) {
+        data->scroll_offset = new_scroll;
+        data->selected_index = total - 1;
     }
     xSemaphoreGive(data->sig_mtx);
 
-    data->needs_redraw = true;
+    /* status row always needs an update on every event (counter + LIVE state). */
+    data->status_dirty = true;
+
+    if (merge_idx >= 0) {
+        mark_row_dirty(data, merge_idx);
+    } else if (ring_shifted || scroll_changed) {
+        data->window_dirty = true;
+    } else if (appended >= 0) {
+        mark_row_dirty(data, appended);
+    }
 }
 
 static void format_row(const subghz_signal_t *sig, char *out, size_t n)
@@ -207,12 +274,14 @@ static void redraw_status_row(subghz_listen_data_t *data)
     if (data->toast_visible) {
         ui_print(0, 1, data->toast_text, UI_COLOR_HIGHLIGHT);
     } else {
-        char left[20];
+        char left[24];
         int whole = (int)data->freq_mhz;
         int frac  = ((int)(data->freq_mhz * 100.0f + 0.5f)) % 100;
-        snprintf(left, sizeof(left), "%d.%02d %s", whole, frac,
-                 data->raw_mode ? "RAW" : "Dec");
-        ui_print(0, 1, left, data->running ? UI_COLOR_TITLE : UI_COLOR_TEXT);
+        snprintf(left, sizeof(left), "%s %d.%02d %s",
+                 data->running ? "LIVE" : "STOPPED",
+                 whole, frac, data->raw_mode ? "RAW" : "Dec");
+        ui_print(0, 1, left,
+                 data->running ? LISTEN_COLOR_LIVE : LISTEN_COLOR_STOPPED);
     }
 
     char right[16];
@@ -221,6 +290,24 @@ static void redraw_status_row(subghz_listen_data_t *data)
     int col = UI_COLS - (int)strlen(right);
     if (col < 0) col = 0;
     ui_print(col, 1, right, UI_COLOR_DIMMED);
+}
+
+static void redraw_empty_hint(subghz_listen_data_t *data)
+{
+    /* Body area (rows 2..6, 5 rows) is currently blank when sig_count==0;
+     * paint a single centred row 4 hint based on running state. */
+    int y = 4 * 16;
+    display_fill_rect(0, y, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+    if (data->sig_count > 0) {
+        data->empty_hint_drawn = false;
+        return;
+    }
+    if (data->running) {
+        ui_print_center(4, "No signals captured", UI_COLOR_DIMMED);
+    } else {
+        ui_print_center(4, "Press SPACE to start", LISTEN_COLOR_STOPPED);
+    }
+    data->empty_hint_drawn = true;
 }
 
 static void redraw_list_window(subghz_listen_data_t *data)
@@ -246,6 +333,12 @@ static void redraw_list_window(subghz_listen_data_t *data)
     if (data->scroll_offset + VISIBLE_ITEMS < data->sig_count) {
         ui_print(UI_COLS - 2, 2 + VISIBLE_ITEMS - 1, "v", UI_COLOR_DIMMED);
     }
+
+    if (data->sig_count == 0) {
+        redraw_empty_hint(data);
+    } else {
+        data->empty_hint_drawn = false;
+    }
 }
 
 static void draw_list_view(screen_t *self)
@@ -257,11 +350,12 @@ static void draw_list_view(screen_t *self)
     redraw_status_row(data);
     redraw_list_window(data);
 
-    if (data->sig_count == 0) {
-        ui_print_center(4, "No signals captured", UI_COLOR_DIMMED);
-    }
-
     ui_draw_status("ENT:Act SP:Run F:Frq R:Raw");
+
+    /* On full draw all dirty flags are cleared. */
+    data->status_dirty = false;
+    data->window_dirty = false;
+    clear_row_dirty(data);
 }
 
 static void draw_actions_view(screen_t *self)
@@ -319,26 +413,36 @@ static void on_tick(screen_t *self)
 {
     subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
     if (data->view != LISTEN_VIEW_LIST) {
-        data->needs_redraw = false;
+        /* Drop dirty flags collected while a sub-view was active; the next
+         * return to LIST view paints fresh in leave_menu_resume_capture(). */
+        data->status_dirty = false;
+        data->window_dirty = false;
+        clear_row_dirty(data);
         return;
     }
-    if (!data->needs_redraw) return;
-    data->needs_redraw = false;
 
-    xSemaphoreTake(data->sig_mtx, portMAX_DELAY);
-    int total = data->sig_count;
-
-    if (data->follow_latest && total > 0) {
-        data->selected_index = total - 1;
-        int max_scroll = total - VISIBLE_ITEMS;
-        if (max_scroll < 0) max_scroll = 0;
-        data->scroll_offset = max_scroll;
+    if (data->status_dirty) {
+        redraw_status_row(data);
+        data->status_dirty = false;
     }
-    xSemaphoreGive(data->sig_mtx);
 
-    redraw_status_row(data);
-    redraw_list_window(data);
-    data->prev_count_drawn = total;
+    /* Empty hint visibility may flip when sig_count crosses 0<->>0 or the
+     * running state changes. Cheap to keep in sync via the same path. */
+    bool want_hint = (data->sig_count == 0);
+    if (want_hint != data->empty_hint_drawn) {
+        redraw_empty_hint(data);
+    }
+
+    if (data->window_dirty) {
+        redraw_list_window(data);
+        data->window_dirty = false;
+        clear_row_dirty(data);
+    } else if (data->row_dirty_from >= 0) {
+        for (int i = data->row_dirty_from; i <= data->row_dirty_to; i++) {
+            redraw_signal_row(data, i);
+        }
+        clear_row_dirty(data);
+    }
 }
 
 static void redraw_two_rows(subghz_listen_data_t *data, int old_idx, int new_idx)
@@ -383,7 +487,10 @@ static void start_rx(screen_t *self)
     else                uart_send_command("subghz_rx");
 
     ESP_LOGI(TAG, "Listen started (%.2f MHz, raw=%d)", data->freq_mhz, data->raw_mode);
-    if (data->view == LISTEN_VIEW_LIST) redraw_status_row(data);
+    if (data->view == LISTEN_VIEW_LIST) {
+        redraw_status_row(data);
+        if (data->sig_count == 0) redraw_empty_hint(data);
+    }
 }
 
 static void stop_rx(screen_t *self)
@@ -395,7 +502,10 @@ static void stop_rx(screen_t *self)
     uart_clear_line_callback();
     data->running = false;
     ESP_LOGI(TAG, "Listen stopped");
-    if (data->view == LISTEN_VIEW_LIST) redraw_status_row(data);
+    if (data->view == LISTEN_VIEW_LIST) {
+        redraw_status_row(data);
+        if (data->sig_count == 0) redraw_empty_hint(data);
+    }
 }
 
 static void enter_actions_view(screen_t *self)
@@ -512,15 +622,21 @@ static void on_key_list(screen_t *self, key_code_t key)
             if (data->sig_count == 0) break;
             data->follow_latest = false;
             if (data->selected_index > 0) {
-                int old = data->selected_index;
-                int new_idx = old - 1;
-                if (new_idx < data->scroll_offset) {
-                    data->scroll_offset = new_idx;
-                    data->selected_index = new_idx;
+                int old_idx = data->selected_index;
+                /* network_list_screen idiom: page-jump from the top edge of
+                 * the current page; single-step otherwise. */
+                if (data->selected_index == data->scroll_offset &&
+                    data->scroll_offset > 0) {
+                    data->scroll_offset -= VISIBLE_ITEMS;
+                    if (data->scroll_offset < 0) data->scroll_offset = 0;
+                    data->selected_index = data->scroll_offset + VISIBLE_ITEMS - 1;
+                    if (data->selected_index >= data->sig_count) {
+                        data->selected_index = data->sig_count - 1;
+                    }
                     redraw_list_window(data);
                 } else {
-                    data->selected_index = new_idx;
-                    redraw_two_rows(data, old, new_idx);
+                    data->selected_index = old_idx - 1;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
             }
             break;
@@ -528,17 +644,19 @@ static void on_key_list(screen_t *self, key_code_t key)
         case KEY_DOWN:
             if (data->sig_count == 0) break;
             if (data->selected_index < data->sig_count - 1) {
-                int old = data->selected_index;
-                int new_idx = old + 1;
-                if (new_idx >= data->scroll_offset + VISIBLE_ITEMS) {
-                    data->scroll_offset = new_idx - VISIBLE_ITEMS + 1;
-                    data->selected_index = new_idx;
+                int old_idx = data->selected_index;
+                if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
+                    data->scroll_offset += VISIBLE_ITEMS;
+                    if (data->scroll_offset > data->sig_count - 1) {
+                        data->scroll_offset = data->sig_count - 1;
+                    }
+                    data->selected_index = data->scroll_offset;
                     redraw_list_window(data);
                 } else {
-                    data->selected_index = new_idx;
-                    redraw_two_rows(data, old, new_idx);
+                    data->selected_index = old_idx + 1;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
-                if (new_idx == data->sig_count - 1) {
+                if (data->selected_index == data->sig_count - 1) {
                     data->follow_latest = true;
                 }
             } else {
@@ -696,10 +814,11 @@ screen_t* subghz_listen_screen_create(void *params)
     data->raw_mode = false;
     data->follow_latest = true;
     data->view = LISTEN_VIEW_LIST;
+    data->row_dirty_from = -1;
+    data->row_dirty_to = -1;
     data->sig_mtx = xSemaphoreCreateMutex();
     data->self = screen;
 
-    bool autostart = s_pending_autostart;
     s_pending_freq = 0.0f;
     s_pending_autostart = false;
 
@@ -715,13 +834,15 @@ screen_t* subghz_listen_screen_create(void *params)
     draw_screen(screen);
     ESP_LOGI(TAG, "Listen screen created");
 
-    if (autostart) {
-        start_rx(screen);
-    }
+    /* Listen always auto-starts on entry — the LIVE/STOPPED badge keeps the
+     * user from doubting whether RX is on. SPACE pauses, SPACE resumes. */
+    start_rx(screen);
     return screen;
 }
 
-/* Used by Scanner to jump directly to Listen on a detected freq. */
+/* Used by Scanner to jump directly to Listen on a detected freq. The
+ * autostart flag is now ignored — Listen always starts — but the public
+ * API is kept stable. */
 void subghz_listen_screen_set_pending(float freq_mhz, bool autostart)
 {
     s_pending_freq = freq_mhz;

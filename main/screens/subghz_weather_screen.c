@@ -11,6 +11,10 @@
  *
  * Cardputer rendering: 5 visible sensor rows, scrollable through the 8 slots,
  * status row at the bottom shows freq + active sensor count.
+ *
+ * Repaint model: only the slot row that the upsert touched is marked dirty;
+ * KEY_R marks the whole window dirty for an age-refresh sweep. No
+ * draw_screen()/ui_clear() in the on_tick hot path.
  */
 
 #include "subghz_weather_screen.h"
@@ -28,8 +32,6 @@ static const char *TAG = "SUBGHZ_WX";
 
 #define MAX_SENSORS     8
 #define VISIBLE_ROWS    5
-#define UI_TICK_PERIOD  10   /* main loop calls on_tick every ~500ms; 10 ticks -> ~5s.
-                                We poll on every tick because needs_redraw drives renders. */
 
 typedef struct {
     bool     used;
@@ -49,7 +51,15 @@ typedef struct {
     float listen_freq;
     int   selected_index;     /* index into sensors[], including empty slots */
     int   scroll_offset;
-    bool  needs_redraw;
+    int   active_count;       /* last rendered count, used to detect changes */
+
+    /* Per-row dirty model. */
+    bool  title_dirty;
+    bool  status_dirty;
+    bool  window_dirty;
+    int   row_dirty_from;     /* -1 = none */
+    int   row_dirty_to;
+
     screen_t *self;
 } subghz_wx_data_t;
 
@@ -58,6 +68,21 @@ static subghz_wx_data_t *s_current = NULL;
 static void draw_screen(screen_t *self);
 static void redraw_sensor_row(subghz_wx_data_t *data, int slot_idx);
 static void redraw_list_window(subghz_wx_data_t *data);
+static void redraw_title(subghz_wx_data_t *data);
+static void redraw_status_row(subghz_wx_data_t *data);
+
+static void mark_row_dirty(subghz_wx_data_t *d, int idx)
+{
+    if (idx < 0) return;
+    if (d->row_dirty_from < 0 || idx < d->row_dirty_from) d->row_dirty_from = idx;
+    if (idx > d->row_dirty_to) d->row_dirty_to = idx;
+}
+
+static void clear_row_dirty(subghz_wx_data_t *d)
+{
+    d->row_dirty_from = -1;
+    d->row_dirty_to = -1;
+}
 
 static int find_slot_locked(subghz_wx_data_t *data, const char *proto,
                             unsigned long id, const char *ch)
@@ -86,13 +111,19 @@ static int pick_free_or_lru_locked(subghz_wx_data_t *data)
     return lru;
 }
 
-static void upsert_sensor(subghz_wx_data_t *data, const char *proto,
-                          unsigned long id, const char *ch,
-                          const char *temp, const char *hum, const char *batt)
+/* Returns the slot index that was touched (always >=0), or -1 if upsert was a
+ * no-op (shouldn't happen). */
+static int upsert_sensor(subghz_wx_data_t *data, const char *proto,
+                         unsigned long id, const char *ch,
+                         const char *temp, const char *hum, const char *batt)
 {
     xSemaphoreTake(data->mtx, portMAX_DELAY);
     int slot = find_slot_locked(data, proto, id, ch);
-    if (slot < 0) slot = pick_free_or_lru_locked(data);
+    bool was_new = false;
+    if (slot < 0) {
+        slot = pick_free_or_lru_locked(data);
+        was_new = true;
+    }
 
     weather_sensor_t *s = &data->sensors[slot];
     s->used = true;
@@ -105,7 +136,8 @@ static void upsert_sensor(subghz_wx_data_t *data, const char *proto,
     s->last_seen_us = esp_timer_get_time();
     xSemaphoreGive(data->mtx);
 
-    data->needs_redraw = true;
+    if (was_new) data->status_dirty = true;
+    return slot;
 }
 
 static void uart_line_cb(const char *line, void *user_data)
@@ -118,8 +150,8 @@ static void uart_line_cb(const char *line, void *user_data)
         const char *p = strstr(line, "freq=");
         if (p && sscanf(p, "freq=%f", &f) == 1) {
             data->listen_freq = f;
+            data->title_dirty = true;
         }
-        data->needs_redraw = true;
         return;
     }
 
@@ -136,7 +168,8 @@ static void uart_line_cb(const char *line, void *user_data)
     if (sscanf(p,
                "[SUBGHZ_WEATHER] proto=%23s id=0x%lX ch=%7s temp=%15s hum=%7s batt=%7s",
                proto, &id, ch, temp, hum, batt) == 6) {
-        upsert_sensor(data, proto, id, ch, temp, hum, batt);
+        int slot = upsert_sensor(data, proto, id, ch, temp, hum, batt);
+        if (slot >= 0) mark_row_dirty(data, slot);
     }
 }
 
@@ -222,13 +255,8 @@ static int count_active(subghz_wx_data_t *data)
     return n;
 }
 
-static void draw_screen(screen_t *self)
+static void redraw_title(subghz_wx_data_t *data)
 {
-    subghz_wx_data_t *data = (subghz_wx_data_t *)self->user_data;
-    int active = count_active(data);
-
-    ui_clear();
-
     char title[24];
     if (data->listen_freq > 0.0f) {
         int whole = (int)data->listen_freq;
@@ -238,22 +266,57 @@ static void draw_screen(screen_t *self)
         snprintf(title, sizeof(title), "Weather");
     }
     ui_draw_title(title);
+}
 
-    redraw_list_window(data);
-
+static void redraw_status_row(subghz_wx_data_t *data)
+{
+    int active = count_active(data);
+    data->active_count = active;
     char status[36];
     snprintf(status, sizeof(status), "%d sensor%s   ESC:Back",
              active, active == 1 ? "" : "s");
     ui_draw_status(status);
 }
 
+static void draw_screen(screen_t *self)
+{
+    subghz_wx_data_t *data = (subghz_wx_data_t *)self->user_data;
+
+    ui_clear();
+    redraw_title(data);
+    redraw_list_window(data);
+    redraw_status_row(data);
+
+    data->title_dirty = false;
+    data->status_dirty = false;
+    data->window_dirty = false;
+    clear_row_dirty(data);
+}
+
 static void on_tick(screen_t *self)
 {
     subghz_wx_data_t *data = (subghz_wx_data_t *)self->user_data;
-    if (!data->needs_redraw) return;
-    data->needs_redraw = false;
-    /* Full redraw: data + age changed. Cheap enough at our refresh cadence. */
-    draw_screen(self);
+
+    if (data->title_dirty) {
+        redraw_title(data);
+        data->title_dirty = false;
+    }
+
+    if (data->status_dirty) {
+        redraw_status_row(data);
+        data->status_dirty = false;
+    }
+
+    if (data->window_dirty) {
+        redraw_list_window(data);
+        data->window_dirty = false;
+        clear_row_dirty(data);
+    } else if (data->row_dirty_from >= 0) {
+        for (int i = data->row_dirty_from; i <= data->row_dirty_to; i++) {
+            redraw_sensor_row(data, i);
+        }
+        clear_row_dirty(data);
+    }
 }
 
 static void redraw_two_rows(subghz_wx_data_t *data, int old_idx, int new_idx)
@@ -269,36 +332,44 @@ static void on_key(screen_t *self, key_code_t key)
     switch (key) {
         case KEY_UP:
             if (data->selected_index > 0) {
-                int old = data->selected_index;
-                int new_idx = old - 1;
-                if (new_idx < data->scroll_offset) {
-                    data->scroll_offset = new_idx;
-                    data->selected_index = new_idx;
+                int old_idx = data->selected_index;
+                if (data->selected_index == data->scroll_offset &&
+                    data->scroll_offset > 0) {
+                    data->scroll_offset -= VISIBLE_ROWS;
+                    if (data->scroll_offset < 0) data->scroll_offset = 0;
+                    data->selected_index = data->scroll_offset + VISIBLE_ROWS - 1;
+                    if (data->selected_index >= MAX_SENSORS) {
+                        data->selected_index = MAX_SENSORS - 1;
+                    }
                     redraw_list_window(data);
                 } else {
-                    data->selected_index = new_idx;
-                    redraw_two_rows(data, old, new_idx);
+                    data->selected_index = old_idx - 1;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
             }
             break;
 
         case KEY_DOWN:
             if (data->selected_index < MAX_SENSORS - 1) {
-                int old = data->selected_index;
-                int new_idx = old + 1;
-                if (new_idx >= data->scroll_offset + VISIBLE_ROWS) {
-                    data->scroll_offset = new_idx - VISIBLE_ROWS + 1;
-                    data->selected_index = new_idx;
+                int old_idx = data->selected_index;
+                if (data->selected_index == data->scroll_offset + VISIBLE_ROWS - 1) {
+                    data->scroll_offset += VISIBLE_ROWS;
+                    if (data->scroll_offset > MAX_SENSORS - 1) {
+                        data->scroll_offset = MAX_SENSORS - 1;
+                    }
+                    data->selected_index = data->scroll_offset;
                     redraw_list_window(data);
                 } else {
-                    data->selected_index = new_idx;
-                    redraw_two_rows(data, old, new_idx);
+                    data->selected_index = old_idx + 1;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
             }
             break;
 
         case KEY_R:
-            data->needs_redraw = true;
+            /* User-driven age refresh: repaint the visible window once so
+             * "age" columns update without waiting for new sensor packets. */
+            data->window_dirty = true;
             break;
 
         case KEY_ESC:
@@ -348,6 +419,8 @@ screen_t* subghz_weather_screen_create(void *params)
 
     data->mtx = xSemaphoreCreateMutex();
     data->listen_freq = 0.0f;
+    data->row_dirty_from = -1;
+    data->row_dirty_to = -1;
     data->self = screen;
     s_current = data;
 

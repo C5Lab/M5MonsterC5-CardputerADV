@@ -13,6 +13,9 @@
  *
  * Export / Import were removed - the SD library is the canonical store; mem-cached
  * captures from Hunter/Listen are promoted via per-item Save to SD.
+ *
+ * Repaint model: per-row dirty flags. on_tick never calls draw_list_view (which
+ * does a ui_clear) — instead it dispatches title/status/window/rows individually.
  */
 
 #include "subghz_manage_screen.h"
@@ -78,7 +81,15 @@ typedef struct {
     uint16_t status_color;
     bool status_visible;
 
-    bool needs_redraw;
+    /* Per-row dirty model. */
+    bool title_dirty;
+    bool status_dirty;
+    bool window_dirty;
+    int  row_dirty_from;     /* -1 = none */
+    int  row_dirty_to;
+    bool empty_hint_drawn;
+    int  last_title_count;   /* count last reflected in the title */
+
     SemaphoreHandle_t sig_mtx;
     screen_t *self;
 } subghz_sd_data_t;
@@ -89,10 +100,26 @@ static void draw_screen(screen_t *self);
 static void draw_list_view(screen_t *self);
 static void draw_actions_view(screen_t *self);
 static void draw_confirm_view(screen_t *self);
+static void redraw_title(subghz_sd_data_t *data);
+static void redraw_status_line(subghz_sd_data_t *data);
 static void redraw_list_window(subghz_sd_data_t *data);
 static void redraw_signal_row(subghz_sd_data_t *data, int sig_idx);
+static void redraw_empty_hint(subghz_sd_data_t *data);
 static void request_list_refresh(subghz_sd_data_t *data);
 static void uart_line_cb(const char *line, void *user_data);
+
+static void mark_row_dirty(subghz_sd_data_t *d, int idx)
+{
+    if (idx < 0) return;
+    if (d->row_dirty_from < 0 || idx < d->row_dirty_from) d->row_dirty_from = idx;
+    if (idx > d->row_dirty_to) d->row_dirty_to = idx;
+}
+
+static void clear_row_dirty(subghz_sd_data_t *d)
+{
+    d->row_dirty_from = -1;
+    d->row_dirty_to = -1;
+}
 
 static void fill_signal(sd_signal_t *dst, const subghz_signal_info_t *src)
 {
@@ -108,15 +135,18 @@ static void fill_signal(sd_signal_t *dst, const subghz_signal_info_t *src)
     snprintf(dst->name, sizeof(dst->name), "%s", src->name[0] ? src->name : "");
 }
 
-static void append_signal_locked(subghz_sd_data_t *data,
-                                 const subghz_signal_info_t *src)
+/* Returns the row index of the new entry, or -1 if it was dropped. */
+static int append_signal_locked(subghz_sd_data_t *data,
+                                const subghz_signal_info_t *src)
 {
     if (data->sig_count >= SUBGHZ_MAX_SIGNALS) {
         ESP_LOGW(TAG, "SD list cap reached at %d, dropping rest", data->sig_count);
-        return;
+        return -1;
     }
-    if (src->idx <= 0 && !src->is_raw) return;
+    if (src->idx <= 0 && !src->is_raw) return -1;
+    int new_idx = data->sig_count;
     fill_signal(&data->sigs[data->sig_count++], src);
+    return new_idx;
 }
 
 static void set_status(subghz_sd_data_t *data, const char *text, uint16_t color)
@@ -124,7 +154,7 @@ static void set_status(subghz_sd_data_t *data, const char *text, uint16_t color)
     snprintf(data->status_text, sizeof(data->status_text), "%s", text ? text : "");
     data->status_color = color;
     data->status_visible = (text != NULL && text[0] != '\0');
-    data->needs_redraw = true;
+    data->status_dirty = true;
 }
 
 static void uart_line_cb(const char *line, void *user_data)
@@ -162,10 +192,14 @@ static void uart_line_cb(const char *line, void *user_data)
             return;
         }
         data->collecting_list = false;
-        if (data->view == SD_VIEW_LOADING) {
+        bool was_loading = (data->view == SD_VIEW_LOADING);
+        if (was_loading) {
             data->view = SD_VIEW_LIST;
+            /* First time the list materialises: paint the whole window once. */
+            data->window_dirty = true;
         }
-        data->needs_redraw = true;
+        /* title shows "(N)" — keep it in sync on every refresh. */
+        data->title_dirty = true;
         return;
     }
 
@@ -185,9 +219,13 @@ static void uart_line_cb(const char *line, void *user_data)
     if (parsed.kind != SUBGHZ_SIGNAL_KIND_LIST) return;
 
     xSemaphoreTake(data->sig_mtx, portMAX_DELAY);
-    append_signal_locked(data, &parsed);
+    int new_idx = append_signal_locked(data, &parsed);
     xSemaphoreGive(data->sig_mtx);
-    data->needs_redraw = true;
+
+    if (new_idx >= 0) {
+        mark_row_dirty(data, new_idx);
+        data->title_dirty = true;     /* "(N)" counter changed */
+    }
 }
 
 static void request_list_refresh(subghz_sd_data_t *data)
@@ -199,6 +237,8 @@ static void request_list_refresh(subghz_sd_data_t *data)
     xSemaphoreGive(data->sig_mtx);
 
     data->collecting_list = true;
+    data->title_dirty = true;
+    data->window_dirty = true;
     uart_send_command("subghz_list sd");
 }
 
@@ -239,6 +279,43 @@ static void redraw_signal_row(subghz_sd_data_t *data, int sig_idx)
     ui_draw_menu_item(ui_row, buf, selected, false, false);
 }
 
+static void redraw_title(subghz_sd_data_t *data)
+{
+    char title[24];
+    snprintf(title, sizeof(title), "SD Signals (%d)", data->sig_count);
+    /* ui_draw_title repaints just the title row (row 0). */
+    ui_draw_title(title);
+    data->last_title_count = data->sig_count;
+}
+
+static void redraw_status_line(subghz_sd_data_t *data)
+{
+    /* Single-line status overlay on row 6 (above the status hint at row 7). */
+    int y = 6 * 16;
+    display_fill_rect(0, y, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+    if (data->status_visible) {
+        ui_print(0, 6, data->status_text, data->status_color);
+    }
+}
+
+static void redraw_empty_hint(subghz_sd_data_t *data)
+{
+    int y = 3 * 16;
+    display_fill_rect(0, y, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+    if (data->sig_count > 0 && !data->clearing_all) {
+        data->empty_hint_drawn = false;
+        return;
+    }
+    if (data->clearing_all) {
+        ui_print_center(3, "Clearing SD...", UI_COLOR_HIGHLIGHT);
+    } else if (data->view == SD_VIEW_LOADING) {
+        ui_print_center(3, "Loading...", UI_COLOR_DIMMED);
+    } else {
+        ui_print_center(3, "No signals on SD", UI_COLOR_DIMMED);
+    }
+    data->empty_hint_drawn = true;
+}
+
 static void redraw_list_window(subghz_sd_data_t *data)
 {
     for (int i = 0; i < VISIBLE_ITEMS; i++) {
@@ -260,6 +337,12 @@ static void redraw_list_window(subghz_sd_data_t *data)
         ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
     if (data->scroll_offset + VISIBLE_ITEMS < data->sig_count)
         ui_print(UI_COLS - 2, 1 + VISIBLE_ITEMS - 1, "v", UI_COLOR_DIMMED);
+
+    if (data->sig_count == 0 || data->clearing_all) {
+        redraw_empty_hint(data);
+    } else {
+        data->empty_hint_drawn = false;
+    }
 }
 
 static void draw_list_view(screen_t *self)
@@ -267,25 +350,15 @@ static void draw_list_view(screen_t *self)
     subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
 
     ui_clear();
-    char title[24];
-    snprintf(title, sizeof(title), "SD Signals (%d)", data->sig_count);
-    ui_draw_title(title);
-
-    if (data->clearing_all) {
-        ui_print_center(3, "Clearing SD...", UI_COLOR_HIGHLIGHT);
-    } else if (data->sig_count == 0) {
-        ui_print_center(3, data->view == SD_VIEW_LOADING
-                              ? "Loading..."
-                              : "No signals on SD", UI_COLOR_DIMMED);
-    } else {
-        redraw_list_window(data);
-    }
-
-    if (data->status_visible) {
-        ui_print(0, 6, data->status_text, data->status_color);
-    }
-
+    redraw_title(data);
+    redraw_list_window(data);
+    redraw_status_line(data);
     ui_draw_status("ENT:Act X:Clr ESC:Back");
+
+    data->title_dirty = false;
+    data->status_dirty = false;
+    data->window_dirty = false;
+    clear_row_dirty(data);
 }
 
 static void draw_actions_view(screen_t *self)
@@ -371,12 +444,42 @@ static void draw_screen(screen_t *self)
 static void on_tick(screen_t *self)
 {
     subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
-    if (!data->needs_redraw) return;
-    data->needs_redraw = false;
 
-    /* Only repaint backgrounds for views driven by async events. */
-    if (data->view == SD_VIEW_LOADING || data->view == SD_VIEW_LIST) {
-        draw_list_view(self);
+    /* Background async updates only land on the list-style views. */
+    if (data->view != SD_VIEW_LOADING && data->view != SD_VIEW_LIST) {
+        data->title_dirty = false;
+        data->status_dirty = false;
+        data->window_dirty = false;
+        clear_row_dirty(data);
+        return;
+    }
+
+    if (data->title_dirty && data->last_title_count != data->sig_count) {
+        redraw_title(data);
+        data->title_dirty = false;
+    } else if (data->title_dirty) {
+        data->title_dirty = false;
+    }
+
+    if (data->status_dirty) {
+        redraw_status_line(data);
+        data->status_dirty = false;
+    }
+
+    bool want_hint = (data->sig_count == 0) || data->clearing_all;
+    if (want_hint != data->empty_hint_drawn) {
+        redraw_empty_hint(data);
+    }
+
+    if (data->window_dirty) {
+        redraw_list_window(data);
+        data->window_dirty = false;
+        clear_row_dirty(data);
+    } else if (data->row_dirty_from >= 0) {
+        for (int i = data->row_dirty_from; i <= data->row_dirty_to; i++) {
+            redraw_signal_row(data, i);
+        }
+        clear_row_dirty(data);
     }
 }
 
@@ -490,15 +593,19 @@ static void on_key_list(screen_t *self, key_code_t key)
         case KEY_UP:
             if (data->sig_count == 0) break;
             if (data->selected_index > 0) {
-                int old = data->selected_index;
-                int new_idx = old - 1;
-                if (new_idx < data->scroll_offset) {
-                    data->scroll_offset = new_idx;
-                    data->selected_index = new_idx;
+                int old_idx = data->selected_index;
+                if (data->selected_index == data->scroll_offset &&
+                    data->scroll_offset > 0) {
+                    data->scroll_offset -= VISIBLE_ITEMS;
+                    if (data->scroll_offset < 0) data->scroll_offset = 0;
+                    data->selected_index = data->scroll_offset + VISIBLE_ITEMS - 1;
+                    if (data->selected_index >= data->sig_count) {
+                        data->selected_index = data->sig_count - 1;
+                    }
                     redraw_list_window(data);
                 } else {
-                    data->selected_index = new_idx;
-                    redraw_two_rows(data, old, new_idx);
+                    data->selected_index = old_idx - 1;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
             }
             break;
@@ -506,15 +613,17 @@ static void on_key_list(screen_t *self, key_code_t key)
         case KEY_DOWN:
             if (data->sig_count == 0) break;
             if (data->selected_index < data->sig_count - 1) {
-                int old = data->selected_index;
-                int new_idx = old + 1;
-                if (new_idx >= data->scroll_offset + VISIBLE_ITEMS) {
-                    data->scroll_offset = new_idx - VISIBLE_ITEMS + 1;
-                    data->selected_index = new_idx;
+                int old_idx = data->selected_index;
+                if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
+                    data->scroll_offset += VISIBLE_ITEMS;
+                    if (data->scroll_offset > data->sig_count - 1) {
+                        data->scroll_offset = data->sig_count - 1;
+                    }
+                    data->selected_index = data->scroll_offset;
                     redraw_list_window(data);
                 } else {
-                    data->selected_index = new_idx;
-                    redraw_two_rows(data, old, new_idx);
+                    data->selected_index = old_idx + 1;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
             }
             break;
@@ -691,6 +800,9 @@ screen_t* subghz_manage_screen_create(void *params)
     data->sig_mtx = xSemaphoreCreateMutex();
     data->view = SD_VIEW_LOADING;
     data->collecting_list = true;
+    data->row_dirty_from = -1;
+    data->row_dirty_to = -1;
+    data->last_title_count = -1;
     data->self = screen;
     s_current = data;
 

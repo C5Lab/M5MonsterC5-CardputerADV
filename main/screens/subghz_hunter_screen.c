@@ -11,6 +11,11 @@
  * action menu (Save to SD / Transmit / Cancel); SPACE toggles capture
  * start/stop. ESC with captures in the list shows a leave-warning confirm
  * (signals in mem are lost on reboot or subghz_clear).
+ *
+ * Repaint model mirrors Listen: each async event sets the smallest possible
+ * dirty flag (status_dirty / window_dirty / row range) and on_tick dispatches
+ * only what changed. KEY_UP/DOWN page-jump like network_list_screen so per-
+ * row scroll never triggers a full window redraw.
  */
 
 #include "subghz_hunter_screen.h"
@@ -30,6 +35,9 @@ static const char *TAG = "SUBGHZ_HUNT";
 #define VISIBLE_ITEMS       5
 #define SUBGHZ_MAX_SIGNALS  128
 #define STATUS_BUF_LEN      32
+
+#define HUNTER_COLOR_LIVE     UI_COLOR_HIGHLIGHT
+#define HUNTER_COLOR_STOPPED  RGB565(255, 80, 80)
 
 typedef enum {
     HUNTER_STATUS_IDLE = 0,
@@ -76,8 +84,13 @@ typedef struct {
     int  selected_index;
     int  scroll_offset;
     bool follow_latest;
-    bool needs_redraw;
+
+    /* Per-row dirty model — same shape as Listen. */
     bool status_dirty;
+    bool window_dirty;
+    int  row_dirty_from;     /* -1 = none */
+    int  row_dirty_to;
+    bool empty_hint_drawn;
 
     char status_text[STATUS_BUF_LEN];
     hunter_status_kind_t status_kind;
@@ -102,6 +115,20 @@ static void draw_leave_confirm_view(screen_t *self);
 static void redraw_status_row(subghz_hunter_data_t *data);
 static void redraw_list_window(subghz_hunter_data_t *data);
 static void redraw_signal_row(subghz_hunter_data_t *data, int sig_idx);
+static void redraw_empty_hint(subghz_hunter_data_t *data);
+
+static void mark_row_dirty(subghz_hunter_data_t *d, int idx)
+{
+    if (idx < 0) return;
+    if (d->row_dirty_from < 0 || idx < d->row_dirty_from) d->row_dirty_from = idx;
+    if (idx > d->row_dirty_to) d->row_dirty_to = idx;
+}
+
+static void clear_row_dirty(subghz_hunter_data_t *d)
+{
+    d->row_dirty_from = -1;
+    d->row_dirty_to = -1;
+}
 
 static void set_status(subghz_hunter_data_t *data, hunter_status_kind_t kind,
                        const char *fmt, ...) __attribute__((format(printf, 3, 4)));
@@ -131,31 +158,38 @@ static void fill_signal(hunter_signal_t *dst, const subghz_signal_info_t *src)
     snprintf(dst->name, sizeof(dst->name), "%s", src->name[0] ? src->name : "");
 }
 
-static bool merge_duplicate_signal_locked(subghz_hunter_data_t *data,
-                                          const subghz_signal_info_t *src)
+/* Returns the merged-into row index, or -1 on no merge. */
+static int merge_duplicate_signal_locked(subghz_hunter_data_t *data,
+                                         const subghz_signal_info_t *src)
 {
-    if (!src || !src->is_duplicate || data->sig_count == 0) return false;
-    hunter_signal_t *last = &data->sigs[data->sig_count - 1];
-    if (last->is_raw) return false;
+    if (!src || !src->is_duplicate || data->sig_count == 0) return -1;
+    int last_idx = data->sig_count - 1;
+    hunter_signal_t *last = &data->sigs[last_idx];
+    if (last->is_raw) return -1;
 
     bool match_idx = (src->idx > 0 && last->idx == src->idx);
     bool match_fields = (strcmp(last->type, src->type) == 0 &&
                          strcmp(last->serial, src->serial) == 0 &&
                          last->btn == src->btn);
-    if (!match_idx && !match_fields) return false;
+    if (!match_idx && !match_fields) return -1;
     if (src->cnt > 0) last->cnt = src->cnt;
-    return true;
+    return last_idx;
 }
 
-static void append_signal_locked(subghz_hunter_data_t *data,
-                                 const subghz_signal_info_t *src)
+/* Returns the appended row index, or -2 if the ring rolled. */
+static int append_signal_locked(subghz_hunter_data_t *data,
+                                const subghz_signal_info_t *src)
 {
+    bool shifted = false;
     if (data->sig_count >= SUBGHZ_MAX_SIGNALS) {
         memmove(&data->sigs[0], &data->sigs[1],
                 sizeof(data->sigs[0]) * (SUBGHZ_MAX_SIGNALS - 1));
         data->sig_count--;
+        shifted = true;
     }
+    int new_idx = data->sig_count;
     fill_signal(&data->sigs[data->sig_count++], src);
+    return shifted ? -2 : new_idx;
 }
 
 static void parse_fa_status_line(subghz_hunter_data_t *data, const char *line)
@@ -216,12 +250,35 @@ static void uart_line_cb(const char *line, void *user_data)
     if (parsed.kind == SUBGHZ_SIGNAL_KIND_LIST) return;
 
     xSemaphoreTake(data->sig_mtx, portMAX_DELAY);
-    if (!merge_duplicate_signal_locked(data, &parsed)) {
-        append_signal_locked(data, &parsed);
+    int merge_idx = merge_duplicate_signal_locked(data, &parsed);
+    int appended = -1;
+    if (merge_idx < 0) {
+        appended = append_signal_locked(data, &parsed);
+    }
+    int total = data->sig_count;
+    bool was_follow = data->follow_latest;
+    int new_scroll = data->scroll_offset;
+    if (was_follow && total > 0) {
+        new_scroll = total - VISIBLE_ITEMS;
+        if (new_scroll < 0) new_scroll = 0;
+    }
+    bool scroll_changed = (new_scroll != data->scroll_offset);
+    bool ring_shifted = (appended == -2);
+    if (was_follow) {
+        data->scroll_offset = new_scroll;
+        data->selected_index = total - 1;
     }
     xSemaphoreGive(data->sig_mtx);
 
-    data->needs_redraw = true;
+    data->status_dirty = true;
+
+    if (merge_idx >= 0) {
+        mark_row_dirty(data, merge_idx);
+    } else if (ring_shifted || scroll_changed) {
+        data->window_dirty = true;
+    } else if (appended >= 0) {
+        mark_row_dirty(data, appended);
+    }
 }
 
 static void format_row(const hunter_signal_t *sig, char *out, size_t n)
@@ -239,10 +296,12 @@ static void format_row(const hunter_signal_t *sig, char *out, size_t n)
     }
 }
 
-static uint16_t status_color(hunter_status_kind_t kind)
+static uint16_t status_color(const subghz_hunter_data_t *data)
 {
-    switch (kind) {
-        case HUNTER_STATUS_CAPTURING: return UI_COLOR_HIGHLIGHT;
+    /* Stopped overrides everything — should be impossible to miss. */
+    if (!data->running) return HUNTER_COLOR_STOPPED;
+    switch (data->status_kind) {
+        case HUNTER_STATUS_CAPTURING: return HUNTER_COLOR_LIVE;
         case HUNTER_STATUS_SCAN:      return UI_COLOR_TITLE;
         case HUNTER_STATUS_ERROR:     return RGB565(255, 80, 80);
         case HUNTER_STATUS_DUPLICATE: return UI_COLOR_TEXT;
@@ -260,8 +319,11 @@ static void redraw_status_row(subghz_hunter_data_t *data)
 
     if (data->toast_visible) {
         ui_print(0, 1, data->toast_text, UI_COLOR_HIGHLIGHT);
+    } else if (!data->running) {
+        /* Make "STOPPED" loud and consistent with Listen. */
+        ui_print(0, 1, "STOPPED", HUNTER_COLOR_STOPPED);
     } else {
-        ui_print(0, 1, data->status_text, status_color(data->status_kind));
+        ui_print(0, 1, data->status_text, status_color(data));
     }
 
     char right[16];
@@ -287,6 +349,22 @@ static void redraw_signal_row(subghz_hunter_data_t *data, int sig_idx)
     ui_draw_menu_item(ui_row, buf, selected, false, false);
 }
 
+static void redraw_empty_hint(subghz_hunter_data_t *data)
+{
+    int y = 4 * 16;
+    display_fill_rect(0, y, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+    if (data->sig_count > 0) {
+        data->empty_hint_drawn = false;
+        return;
+    }
+    if (data->running) {
+        ui_print_center(4, "Waiting for captures...", UI_COLOR_DIMMED);
+    } else {
+        ui_print_center(4, "Press SPACE to start", HUNTER_COLOR_STOPPED);
+    }
+    data->empty_hint_drawn = true;
+}
+
 static void redraw_list_window(subghz_hunter_data_t *data)
 {
     for (int i = 0; i < VISIBLE_ITEMS; i++) {
@@ -310,6 +388,12 @@ static void redraw_list_window(subghz_hunter_data_t *data)
     if (data->scroll_offset + VISIBLE_ITEMS < data->sig_count) {
         ui_print(UI_COLS - 2, 2 + VISIBLE_ITEMS - 1, "v", UI_COLOR_DIMMED);
     }
+
+    if (data->sig_count == 0) {
+        redraw_empty_hint(data);
+    } else {
+        data->empty_hint_drawn = false;
+    }
 }
 
 static void draw_list_view(screen_t *self)
@@ -321,11 +405,11 @@ static void draw_list_view(screen_t *self)
     redraw_status_row(data);
     redraw_list_window(data);
 
-    if (data->sig_count == 0) {
-        ui_print_center(4, "Waiting for captures...", UI_COLOR_DIMMED);
-    }
-
     ui_draw_status("ENT:Act SP:Run ESC:Back");
+
+    data->status_dirty = false;
+    data->window_dirty = false;
+    clear_row_dirty(data);
 }
 
 static void draw_actions_view(screen_t *self)
@@ -383,39 +467,33 @@ static void on_tick(screen_t *self)
 {
     subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
 
-    /* Background drawing only happens while the list view is current. */
     if (data->view != HUNTER_VIEW_LIST) {
-        data->needs_redraw = false;
         data->status_dirty = false;
+        data->window_dirty = false;
+        clear_row_dirty(data);
         return;
     }
-
-    bool did_status = false;
 
     if (data->status_dirty) {
-        data->status_dirty = false;
         redraw_status_row(data);
-        did_status = true;
+        data->status_dirty = false;
     }
 
-    if (!data->needs_redraw) {
-        (void)did_status;
-        return;
+    bool want_hint = (data->sig_count == 0);
+    if (want_hint != data->empty_hint_drawn) {
+        redraw_empty_hint(data);
     }
-    data->needs_redraw = false;
 
-    xSemaphoreTake(data->sig_mtx, portMAX_DELAY);
-    int total = data->sig_count;
-    if (data->follow_latest && total > 0) {
-        data->selected_index = total - 1;
-        int max_scroll = total - VISIBLE_ITEMS;
-        if (max_scroll < 0) max_scroll = 0;
-        data->scroll_offset = max_scroll;
+    if (data->window_dirty) {
+        redraw_list_window(data);
+        data->window_dirty = false;
+        clear_row_dirty(data);
+    } else if (data->row_dirty_from >= 0) {
+        for (int i = data->row_dirty_from; i <= data->row_dirty_to; i++) {
+            redraw_signal_row(data, i);
+        }
+        clear_row_dirty(data);
     }
-    xSemaphoreGive(data->sig_mtx);
-
-    if (!did_status) redraw_status_row(data);
-    redraw_list_window(data);
 }
 
 static void redraw_two_rows(subghz_hunter_data_t *data, int old_idx, int new_idx)
@@ -452,7 +530,10 @@ static void start_hunting(screen_t *self)
     uart_register_line_callback(uart_line_cb, data);
     uart_send_command("subghz_freq_analyzer hunt");
     set_status(data, HUNTER_STATUS_SCAN, "Hunting...");
-    if (data->view == HUNTER_VIEW_LIST) redraw_status_row(data);
+    if (data->view == HUNTER_VIEW_LIST) {
+        redraw_status_row(data);
+        if (data->sig_count == 0) redraw_empty_hint(data);
+    }
     ESP_LOGI(TAG, "Hunter started");
 }
 
@@ -464,7 +545,10 @@ static void stop_hunting(screen_t *self)
     uart_clear_line_callback();
     data->running = false;
     set_status(data, HUNTER_STATUS_STOPPED, "Stopped");
-    if (data->view == HUNTER_VIEW_LIST) redraw_status_row(data);
+    if (data->view == HUNTER_VIEW_LIST) {
+        redraw_status_row(data);
+        if (data->sig_count == 0) redraw_empty_hint(data);
+    }
     ESP_LOGI(TAG, "Hunter stopped");
 }
 
@@ -548,15 +632,19 @@ static void on_key_list(screen_t *self, key_code_t key)
             if (data->sig_count == 0) break;
             data->follow_latest = false;
             if (data->selected_index > 0) {
-                int old = data->selected_index;
-                int new_idx = old - 1;
-                if (new_idx < data->scroll_offset) {
-                    data->scroll_offset = new_idx;
-                    data->selected_index = new_idx;
+                int old_idx = data->selected_index;
+                if (data->selected_index == data->scroll_offset &&
+                    data->scroll_offset > 0) {
+                    data->scroll_offset -= VISIBLE_ITEMS;
+                    if (data->scroll_offset < 0) data->scroll_offset = 0;
+                    data->selected_index = data->scroll_offset + VISIBLE_ITEMS - 1;
+                    if (data->selected_index >= data->sig_count) {
+                        data->selected_index = data->sig_count - 1;
+                    }
                     redraw_list_window(data);
                 } else {
-                    data->selected_index = new_idx;
-                    redraw_two_rows(data, old, new_idx);
+                    data->selected_index = old_idx - 1;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
             }
             break;
@@ -564,17 +652,21 @@ static void on_key_list(screen_t *self, key_code_t key)
         case KEY_DOWN:
             if (data->sig_count == 0) break;
             if (data->selected_index < data->sig_count - 1) {
-                int old = data->selected_index;
-                int new_idx = old + 1;
-                if (new_idx >= data->scroll_offset + VISIBLE_ITEMS) {
-                    data->scroll_offset = new_idx - VISIBLE_ITEMS + 1;
-                    data->selected_index = new_idx;
+                int old_idx = data->selected_index;
+                if (data->selected_index == data->scroll_offset + VISIBLE_ITEMS - 1) {
+                    data->scroll_offset += VISIBLE_ITEMS;
+                    if (data->scroll_offset > data->sig_count - 1) {
+                        data->scroll_offset = data->sig_count - 1;
+                    }
+                    data->selected_index = data->scroll_offset;
                     redraw_list_window(data);
                 } else {
-                    data->selected_index = new_idx;
-                    redraw_two_rows(data, old, new_idx);
+                    data->selected_index = old_idx + 1;
+                    redraw_two_rows(data, old_idx, data->selected_index);
                 }
-                if (new_idx == data->sig_count - 1) data->follow_latest = true;
+                if (data->selected_index == data->sig_count - 1) {
+                    data->follow_latest = true;
+                }
             } else {
                 data->follow_latest = true;
             }
@@ -729,6 +821,8 @@ screen_t* subghz_hunter_screen_create(void *params)
     data->follow_latest = true;
     data->self = screen;
     data->view = HUNTER_VIEW_LIST;
+    data->row_dirty_from = -1;
+    data->row_dirty_to = -1;
     snprintf(data->status_text, sizeof(data->status_text), "Starting hunter...");
     data->status_kind = HUNTER_STATUS_SCAN;
 
