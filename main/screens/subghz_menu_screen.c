@@ -1,13 +1,12 @@
 /**
  * @file subghz_menu_screen.c
- * @brief Sub-GHz top-level menu (8 entries, scrollable)
+ * @brief Sub-GHz top-level menu (7 entries, scrollable)
  */
 
 #include "subghz_menu_screen.h"
 #include "subghz_scanner_screen.h"
 #include "subghz_hunter_screen.h"
 #include "subghz_listen_screen.h"
-#include "subghz_transmit_screen.h"
 #include "subghz_manage_screen.h"
 #include "subghz_weather_screen.h"
 #include "subghz_jammer_screen.h"
@@ -25,14 +24,13 @@ typedef struct {
 } subghz_menu_entry_t;
 
 static const subghz_menu_entry_t s_entries[] = {
-    {"Scanner",  subghz_scanner_screen_create},
-    {"Hunter",   subghz_hunter_screen_create},
-    {"Listen",   subghz_listen_screen_create},
-    {"Transmit", subghz_transmit_screen_create},
-    {"Manage",   subghz_manage_screen_create},
-    {"Weather",  subghz_weather_screen_create},
-    {"Jammer",   subghz_jammer_screen_create},
-    {"Tesla",    subghz_tesla_screen_create},
+    {"Quick Scan", subghz_scanner_screen_create},
+    {"Hunter",     subghz_hunter_screen_create},
+    {"Listen",     subghz_listen_screen_create},
+    {"SD Signals", subghz_manage_screen_create},
+    {"Weather",    subghz_weather_screen_create},
+    {"Jammer",     subghz_jammer_screen_create},
+    {"Tesla",      subghz_tesla_screen_create},
 };
 
 #define MENU_COUNT     ((int)(sizeof(s_entries) / sizeof(s_entries[0])))

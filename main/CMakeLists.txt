@@ -98,7 +98,6 @@ idf_component_register(
         "screens/subghz_jammer_screen.c"
         "screens/subghz_listen_screen.c"
         "screens/subghz_hunter_screen.c"
-        "screens/subghz_transmit_screen.c"
         "screens/subghz_scanner_screen.c"
         "screens/subghz_manage_screen.c"
         "screens/subghz_weather_screen.c"

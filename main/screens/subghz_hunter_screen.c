@@ -2,14 +2,15 @@
  * @file subghz_hunter_screen.c
  * @brief Sub-GHz Hunter (auto-capture frequency analyzer) screen
  *
- * UART behaviour cloned from coreS3/main/screens/subghz_hunter_screen.c:
+ * UART behaviour:
  *   start:  subghz_freq_analyzer hunt
  *   stop:   subghz_stop
  *
- * Status line is driven by [SUBGHZ_FA*] events (Scan / Capturing / Timeout /
- * Duplicate / Error / Idle), captured signals come in as [SUBGHZ_RX], [SUBGHZ_RX_DUP]
- * or [SUBGHZ_RAW] and are appended to the on-screen list (5 visible rows,
- * two-row redraw on cursor navigation).
+ * Captured signals are appended to the on-screen list (5 visible rows) and
+ * live in the firmware mem cache. ENTER on a selected row opens a per-item
+ * action menu (Save to SD / Transmit / Cancel); SPACE toggles capture
+ * start/stop. ESC with captures in the list shows a leave-warning confirm
+ * (signals in mem are lost on reboot or subghz_clear).
  */
 
 #include "subghz_hunter_screen.h"
@@ -40,6 +41,19 @@ typedef enum {
     HUNTER_STATUS_STOPPED,
 } hunter_status_kind_t;
 
+typedef enum {
+    HUNTER_VIEW_LIST = 0,
+    HUNTER_VIEW_ACTIONS,
+    HUNTER_VIEW_LEAVE_CONFIRM,
+} hunter_view_t;
+
+typedef enum {
+    HUNTER_ACTION_SAVE = 0,
+    HUNTER_ACTION_TX,
+    HUNTER_ACTION_CANCEL,
+    HUNTER_ACTION_COUNT,
+} hunter_action_t;
+
 typedef struct {
     int   idx;
     char  type[32];
@@ -48,6 +62,7 @@ typedef struct {
     int   btn;
     int   cnt;
     char  mf[32];
+    char  name[40];
     bool  is_raw;
 } hunter_signal_t;
 
@@ -67,12 +82,23 @@ typedef struct {
     char status_text[STATUS_BUF_LEN];
     hunter_status_kind_t status_kind;
 
+    hunter_view_t view;
+    int  action_choice;     /* 0=Save, 1=TX, 2=Cancel */
+    int  confirm_choice;    /* 0=Cancel, 1=Leave anyway */
+    bool was_running_pre_menu;
+
+    char toast_text[STATUS_BUF_LEN];
+    bool toast_visible;
+
     screen_t *self;
 } subghz_hunter_data_t;
 
 static subghz_hunter_data_t *s_current = NULL;
 
 static void draw_screen(screen_t *self);
+static void draw_list_view(screen_t *self);
+static void draw_actions_view(screen_t *self);
+static void draw_leave_confirm_view(screen_t *self);
 static void redraw_status_row(subghz_hunter_data_t *data);
 static void redraw_list_window(subghz_hunter_data_t *data);
 static void redraw_signal_row(subghz_hunter_data_t *data, int sig_idx);
@@ -102,6 +128,7 @@ static void fill_signal(hunter_signal_t *dst, const subghz_signal_info_t *src)
     snprintf(dst->type, sizeof(dst->type), "%s", src->type[0] ? src->type : "--");
     snprintf(dst->serial, sizeof(dst->serial), "%s", src->serial[0] ? src->serial : "--");
     snprintf(dst->mf, sizeof(dst->mf), "%s", src->mf[0] ? src->mf : "--");
+    snprintf(dst->name, sizeof(dst->name), "%s", src->name[0] ? src->name : "");
 }
 
 static bool merge_duplicate_signal_locked(subghz_hunter_data_t *data,
@@ -131,7 +158,6 @@ static void append_signal_locked(subghz_hunter_data_t *data,
     fill_signal(&data->sigs[data->sig_count++], src);
 }
 
-/* Mirrors parse_fa_status_line() in coreS3 subghz_hunter_screen.c */
 static void parse_fa_status_line(subghz_hunter_data_t *data, const char *line)
 {
     if (strstr(line, "[SUBGHZ_FA] hunt capture")) {
@@ -174,7 +200,7 @@ static void parse_fa_status_line(subghz_hunter_data_t *data, const char *line)
 static void uart_line_cb(const char *line, void *user_data)
 {
     subghz_hunter_data_t *data = (subghz_hunter_data_t *)user_data;
-    if (!data || !data->running) return;
+    if (!data) return;
 
     /* FA status lines */
     if (strstr(line, "[SUBGHZ_FA")) {
@@ -232,7 +258,11 @@ static void redraw_status_row(subghz_hunter_data_t *data)
     int y = 1 * 16;
     display_fill_rect(0, y, DISPLAY_WIDTH, 16, UI_COLOR_BG);
 
-    ui_print(0, 1, data->status_text, status_color(data->status_kind));
+    if (data->toast_visible) {
+        ui_print(0, 1, data->toast_text, UI_COLOR_HIGHLIGHT);
+    } else {
+        ui_print(0, 1, data->status_text, status_color(data->status_kind));
+    }
 
     char right[16];
     snprintf(right, sizeof(right), "%c %d", data->running ? '*' : '.', data->sig_count);
@@ -282,7 +312,7 @@ static void redraw_list_window(subghz_hunter_data_t *data)
     }
 }
 
-static void draw_screen(screen_t *self)
+static void draw_list_view(screen_t *self)
 {
     subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
 
@@ -295,12 +325,71 @@ static void draw_screen(screen_t *self)
         ui_print_center(4, "Waiting for captures...", UI_COLOR_DIMMED);
     }
 
-    ui_draw_status("ENT:Stp/Strt ESC:Back");
+    ui_draw_status("ENT:Act SP:Run ESC:Back");
+}
+
+static void draw_actions_view(screen_t *self)
+{
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+    ui_clear();
+    ui_draw_title("Signal Action");
+
+    if (data->selected_index < data->sig_count) {
+        const hunter_signal_t *sig = &data->sigs[data->selected_index];
+        char l1[40], l2[40];
+        int whole = (int)sig->freq;
+        int frac  = ((int)(sig->freq * 100.0f + 0.5f)) % 100;
+        snprintf(l1, sizeof(l1), "#%d %.10s %d.%02d", sig->idx, sig->type, whole, frac);
+        snprintf(l2, sizeof(l2), "%.14s %.14s",
+                 sig->mf[0] ? sig->mf : "--", sig->serial[0] ? sig->serial : "--");
+        ui_print_center(2, l1, UI_COLOR_HIGHLIGHT);
+        ui_print_center(3, l2, UI_COLOR_DIMMED);
+    }
+
+    ui_draw_menu_item(4, "Save to SD", data->action_choice == HUNTER_ACTION_SAVE,   false, false);
+    ui_draw_menu_item(5, "Transmit",   data->action_choice == HUNTER_ACTION_TX,     false, false);
+    ui_draw_menu_item(6, "Cancel",     data->action_choice == HUNTER_ACTION_CANCEL, false, false);
+
+    ui_draw_status("UP/DN ENT:Pick ESC:Cancel");
+}
+
+static void draw_leave_confirm_view(screen_t *self)
+{
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+    ui_clear();
+    ui_draw_title("Leave screen?");
+
+    ui_print_center(2, "Captures live in mem.", UI_COLOR_TEXT);
+    ui_print_center(3, "Save to SD first or", UI_COLOR_DIMMED);
+    ui_print_center(4, "they may be lost.", UI_COLOR_DIMMED);
+
+    ui_draw_menu_item(5, "Cancel",       data->confirm_choice == 0, false, false);
+    ui_draw_menu_item(6, "Leave anyway", data->confirm_choice == 1, false, false);
+
+    ui_draw_status("UP/DN ENT:Confirm ESC:Cancel");
+}
+
+static void draw_screen(screen_t *self)
+{
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+    switch (data->view) {
+        case HUNTER_VIEW_LIST:          draw_list_view(self); break;
+        case HUNTER_VIEW_ACTIONS:       draw_actions_view(self); break;
+        case HUNTER_VIEW_LEAVE_CONFIRM: draw_leave_confirm_view(self); break;
+    }
 }
 
 static void on_tick(screen_t *self)
 {
     subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+
+    /* Background drawing only happens while the list view is current. */
+    if (data->view != HUNTER_VIEW_LIST) {
+        data->needs_redraw = false;
+        data->status_dirty = false;
+        return;
+    }
+
     bool did_status = false;
 
     if (data->status_dirty) {
@@ -335,6 +424,24 @@ static void redraw_two_rows(subghz_hunter_data_t *data, int old_idx, int new_idx
     if (new_idx >= 0) redraw_signal_row(data, new_idx);
 }
 
+static void show_toast(subghz_hunter_data_t *data, const char *fmt, ...)
+                       __attribute__((format(printf, 2, 3)));
+
+static void show_toast(subghz_hunter_data_t *data, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(data->toast_text, sizeof(data->toast_text), fmt, ap);
+    va_end(ap);
+    data->toast_visible = true;
+}
+
+static void clear_toast(subghz_hunter_data_t *data)
+{
+    data->toast_visible = false;
+    data->toast_text[0] = '\0';
+}
+
 static void start_hunting(screen_t *self)
 {
     subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
@@ -345,7 +452,7 @@ static void start_hunting(screen_t *self)
     uart_register_line_callback(uart_line_cb, data);
     uart_send_command("subghz_freq_analyzer hunt");
     set_status(data, HUNTER_STATUS_SCAN, "Hunting...");
-    redraw_status_row(data);
+    if (data->view == HUNTER_VIEW_LIST) redraw_status_row(data);
     ESP_LOGI(TAG, "Hunter started");
 }
 
@@ -357,17 +464,82 @@ static void stop_hunting(screen_t *self)
     uart_clear_line_callback();
     data->running = false;
     set_status(data, HUNTER_STATUS_STOPPED, "Stopped");
-    redraw_status_row(data);
+    if (data->view == HUNTER_VIEW_LIST) redraw_status_row(data);
     ESP_LOGI(TAG, "Hunter stopped");
 }
 
-static void on_key(screen_t *self, key_code_t key)
+static void enter_actions_view(screen_t *self)
+{
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+    if (data->sig_count == 0) return;
+    if (data->selected_index >= data->sig_count) return;
+
+    data->was_running_pre_menu = data->running;
+    if (data->running) stop_hunting(self);
+
+    data->action_choice = HUNTER_ACTION_SAVE;
+    data->view = HUNTER_VIEW_ACTIONS;
+    draw_actions_view(self);
+}
+
+static void leave_menu_resume_capture(screen_t *self)
+{
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+    data->view = HUNTER_VIEW_LIST;
+    if (data->was_running_pre_menu && !data->running) {
+        start_hunting(self);
+    }
+    data->was_running_pre_menu = false;
+    draw_list_view(self);
+}
+
+static void perform_save_to_sd(screen_t *self)
+{
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+    if (data->selected_index >= data->sig_count) return;
+    int mem_idx = data->sigs[data->selected_index].idx;
+
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "subghz_save %d", mem_idx);
+    uart_send_command(cmd);
+    ESP_LOGI(TAG, "Sent: %s", cmd);
+
+    show_toast(data, "Saved #%d to SD", mem_idx);
+    leave_menu_resume_capture(self);
+}
+
+static void perform_transmit_mem(screen_t *self)
+{
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+    if (data->selected_index >= data->sig_count) return;
+    int mem_idx = data->sigs[data->selected_index].idx;
+
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "subghz_tx %d mem", mem_idx);
+    uart_send_command(cmd);
+    ESP_LOGI(TAG, "Sent: %s", cmd);
+
+    show_toast(data, "Sent #%d", mem_idx);
+    leave_menu_resume_capture(self);
+}
+
+static void on_key_list(screen_t *self, key_code_t key)
 {
     subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
 
     switch (key) {
         case KEY_ENTER:
+            if (data->sig_count > 0) {
+                clear_toast(data);
+                enter_actions_view(self);
+            } else {
+                if (data->running) stop_hunting(self);
+                else               start_hunting(self);
+            }
+            break;
+
         case KEY_SPACE:
+            clear_toast(data);
             if (data->running) stop_hunting(self);
             else               start_hunting(self);
             break;
@@ -411,16 +583,108 @@ static void on_key(screen_t *self, key_code_t key)
         case KEY_ESC:
         case KEY_Q:
         case KEY_BACKSPACE:
-            if (data->running) {
-                uart_send_command("subghz_stop");
-                uart_clear_line_callback();
-                data->running = false;
+            if (data->sig_count > 0) {
+                data->confirm_choice = 0;
+                data->view = HUNTER_VIEW_LEAVE_CONFIRM;
+                draw_leave_confirm_view(self);
+            } else {
+                if (data->running) {
+                    uart_send_command("subghz_stop");
+                    uart_clear_line_callback();
+                    data->running = false;
+                }
+                screen_manager_pop();
             }
-            screen_manager_pop();
             break;
 
         default:
             break;
+    }
+}
+
+static void on_key_actions(screen_t *self, key_code_t key)
+{
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+
+    switch (key) {
+        case KEY_UP:
+            data->action_choice = (data->action_choice + HUNTER_ACTION_COUNT - 1)
+                                   % HUNTER_ACTION_COUNT;
+            draw_actions_view(self);
+            break;
+
+        case KEY_DOWN:
+            data->action_choice = (data->action_choice + 1) % HUNTER_ACTION_COUNT;
+            draw_actions_view(self);
+            break;
+
+        case KEY_ENTER:
+        case KEY_SPACE:
+            switch (data->action_choice) {
+                case HUNTER_ACTION_SAVE:   perform_save_to_sd(self); break;
+                case HUNTER_ACTION_TX:     perform_transmit_mem(self); break;
+                case HUNTER_ACTION_CANCEL:
+                default:                   leave_menu_resume_capture(self); break;
+            }
+            break;
+
+        case KEY_ESC:
+        case KEY_BACKSPACE:
+        case KEY_Q:
+            leave_menu_resume_capture(self);
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void on_key_leave_confirm(screen_t *self, key_code_t key)
+{
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+
+    switch (key) {
+        case KEY_UP:
+        case KEY_DOWN:
+            data->confirm_choice = data->confirm_choice ? 0 : 1;
+            draw_leave_confirm_view(self);
+            break;
+
+        case KEY_ENTER:
+        case KEY_SPACE:
+            if (data->confirm_choice == 1) {
+                if (data->running) {
+                    uart_send_command("subghz_stop");
+                    uart_clear_line_callback();
+                    data->running = false;
+                }
+                screen_manager_pop();
+            } else {
+                data->view = HUNTER_VIEW_LIST;
+                draw_list_view(self);
+            }
+            break;
+
+        case KEY_ESC:
+        case KEY_BACKSPACE:
+        case KEY_Q:
+            data->view = HUNTER_VIEW_LIST;
+            draw_list_view(self);
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void on_key(screen_t *self, key_code_t key)
+{
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
+    switch (data->view) {
+        case HUNTER_VIEW_ACTIONS:       on_key_actions(self, key); break;
+        case HUNTER_VIEW_LEAVE_CONFIRM: on_key_leave_confirm(self, key); break;
+        case HUNTER_VIEW_LIST:
+        default:                        on_key_list(self, key); break;
     }
 }
 
@@ -464,6 +728,7 @@ screen_t* subghz_hunter_screen_create(void *params)
     data->sig_mtx = xSemaphoreCreateMutex();
     data->follow_latest = true;
     data->self = screen;
+    data->view = HUNTER_VIEW_LIST;
     snprintf(data->status_text, sizeof(data->status_text), "Starting hunter...");
     data->status_kind = HUNTER_STATUS_SCAN;
 
@@ -479,7 +744,6 @@ screen_t* subghz_hunter_screen_create(void *params)
     draw_screen(screen);
     ESP_LOGI(TAG, "Hunter screen created");
 
-    /* Auto-start hunt like coreS3 */
     start_hunting(screen);
 
     return screen;

@@ -1,6 +1,6 @@
 /**
  * @file subghz_menu_screen.h
- * @brief Sub-GHz top-level menu (Scanner / Hunter / Listen / Transmit / Jammer / Tesla)
+ * @brief Sub-GHz top-level menu (Quick Scan / Hunter / Listen / SD Signals / Weather / Jammer / Tesla)
  */
 
 #ifndef SUBGHZ_MENU_SCREEN_H

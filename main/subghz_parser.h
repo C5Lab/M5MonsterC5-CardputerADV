@@ -23,6 +23,7 @@ typedef struct {
     char mf[32];
     char proto[32];
     char learn[24];
+    char name[40];
     int te;
     int edges;
     bool is_raw;

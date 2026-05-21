@@ -1,6 +1,6 @@
 /**
  * @file subghz_manage_screen.h
- * @brief Sub-GHz Manage screen (list/delete/export/import/clear stored signals)
+ * @brief Sub-GHz "SD Signals" screen (browse/rename/delete/transmit/clear SD library)
  */
 
 #ifndef SUBGHZ_MANAGE_SCREEN_H

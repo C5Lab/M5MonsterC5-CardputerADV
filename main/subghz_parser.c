@@ -17,6 +17,7 @@ static const char *const s_signal_keys[] = {
     "cnt=",
     "te=",
     "edges=",
+    "name=",
 };
 
 static const char *find_next_key(const char *value_start)
@@ -173,6 +174,7 @@ bool subghz_parse_signal_line(const char *line, subghz_signal_info_t *out)
     extract_int_field(fields, "cnt=", &out->cnt);
     extract_int_field(fields, "te=", &out->te);
     extract_int_field(fields, "edges=", &out->edges);
+    extract_field(fields, "name=", out->name, sizeof(out->name));
 
     if (out->kind == SUBGHZ_SIGNAL_KIND_RAW) {
         snprintf(out->type, sizeof(out->type), "RAW");

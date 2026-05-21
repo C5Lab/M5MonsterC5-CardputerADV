@@ -185,7 +185,7 @@ static void draw_screen(screen_t *self)
     subghz_scanner_data_t *data = (subghz_scanner_data_t *)self->user_data;
 
     ui_clear();
-    ui_draw_title("Scanner");
+    ui_draw_title("Quick Scan");
     redraw_status_row(data);
     redraw_list_window(data);
 

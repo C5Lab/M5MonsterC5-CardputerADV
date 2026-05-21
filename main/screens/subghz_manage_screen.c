@@ -1,24 +1,25 @@
 /**
  * @file subghz_manage_screen.c
- * @brief Sub-GHz Manage screen
+ * @brief Sub-GHz "SD Signals" screen (SD library browser)
  *
- * UART behaviour cloned from coreS3/main/screens/subghz_manage_screen.c:
- *   open:                send "subghz_list", accumulate [SUBGHZ_LIST] until [SUBGHZ_LIST_END]
- *   E:                   send "subghz_export all"
- *   I:                   send "subghz_import all", count [SUBGHZ_IMPORT] up to [SUBGHZ_IMPORT_END],
- *                        then auto refresh via subghz_list
- *   ENTER + Yes:         send "subghz_delete <idx>", refresh list
- *   X + Yes:             send "subghz_clear", empty local list
+ * UART behaviour:
+ *   open / refresh:    "subghz_list sd"
+ *                      accumulate [SUBGHZ_LIST] until [SUBGHZ_LIST_END] count=N source=sd
+ *   ENTER + Rename:    push text_input_screen, then "subghz_rename <idx> <name>" + refresh
+ *   ENTER + Delete:    confirm, then "subghz_delete <idx>" + refresh
+ *   ENTER + Transmit:  "subghz_tx <idx> sd" (single shot)
+ *   X + Yes:           iteratively "subghz_delete 1" until remaining=0 (firmware
+ *                      subghz_clear only wipes mem; SD wipe must be done by the UI)
  *
- * Cardputer-only: inline line collection (no port of uart_start_collect),
- * the line callback accumulates entries from each command into a single
- * line_callback. Same idiom we use in subghz_transmit_screen.c.
+ * Export / Import were removed - the SD library is the canonical store; mem-cached
+ * captures from Hunter/Listen are promoted via per-item Save to SD.
  */
 
 #include "subghz_manage_screen.h"
 #include "subghz_parser.h"
 #include "uart_handler.h"
 #include "text_ui.h"
+#include "text_input_screen.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -26,10 +27,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-static const char *TAG = "SUBGHZ_MGM";
+static const char *TAG = "SUBGHZ_SD";
 
 #define VISIBLE_ITEMS       5
 #define SUBGHZ_MAX_SIGNALS  128
+#define STATUS_BUF_LEN      32
 
 typedef struct {
     int   idx;
@@ -39,51 +41,60 @@ typedef struct {
     int   btn;
     int   cnt;
     char  mf[32];
+    char  name[40];
     bool  is_raw;
-} mgmt_signal_t;
+} sd_signal_t;
 
 typedef enum {
-    MGM_VIEW_LOADING = 0,
-    MGM_VIEW_LIST,
-    MGM_VIEW_CONFIRM_DELETE,
-    MGM_VIEW_CONFIRM_CLEAR,
-    MGM_VIEW_IMPORTING,
-} mgm_view_t;
+    SD_VIEW_LOADING = 0,
+    SD_VIEW_LIST,
+    SD_VIEW_ACTIONS,
+    SD_VIEW_CONFIRM_DELETE,
+    SD_VIEW_CONFIRM_CLEAR,
+} sd_view_t;
+
+typedef enum {
+    SD_ACTION_RENAME = 0,
+    SD_ACTION_DELETE,
+    SD_ACTION_TRANSMIT,
+    SD_ACTION_CANCEL,
+    SD_ACTION_COUNT,
+} sd_action_t;
 
 typedef struct {
-    mgmt_signal_t sigs[SUBGHZ_MAX_SIGNALS];
+    sd_signal_t sigs[SUBGHZ_MAX_SIGNALS];
     int  sig_count;
 
-    mgm_view_t view;
+    sd_view_t view;
     int  selected_index;
     int  scroll_offset;
-    int  confirm_choice;       /* 0 = Yes, 1 = No */
+    int  action_choice;
+    int  confirm_choice;       /* 0 = Yes, 1 = Cancel */
 
-    /* Async collection state - mirrors what uart_start_collect did on coreS3. */
     bool collecting_list;
-    bool collecting_import;
-    int  imported_count;
+    bool clearing_all;
 
-    /* One-line transient status (e.g. "Export sent", "Deleted #4"). */
-    char status_text[32];
+    char status_text[STATUS_BUF_LEN];
     uint16_t status_color;
     bool status_visible;
 
     bool needs_redraw;
     SemaphoreHandle_t sig_mtx;
     screen_t *self;
-} subghz_mgm_data_t;
+} subghz_sd_data_t;
 
-static subghz_mgm_data_t *s_current = NULL;
+static subghz_sd_data_t *s_current = NULL;
 
 static void draw_screen(screen_t *self);
 static void draw_list_view(screen_t *self);
+static void draw_actions_view(screen_t *self);
 static void draw_confirm_view(screen_t *self);
-static void redraw_list_window(subghz_mgm_data_t *data);
-static void redraw_signal_row(subghz_mgm_data_t *data, int sig_idx);
-static void request_list_refresh(subghz_mgm_data_t *data);
+static void redraw_list_window(subghz_sd_data_t *data);
+static void redraw_signal_row(subghz_sd_data_t *data, int sig_idx);
+static void request_list_refresh(subghz_sd_data_t *data);
+static void uart_line_cb(const char *line, void *user_data);
 
-static void fill_signal(mgmt_signal_t *dst, const subghz_signal_info_t *src)
+static void fill_signal(sd_signal_t *dst, const subghz_signal_info_t *src)
 {
     memset(dst, 0, sizeof(*dst));
     dst->idx = src->idx;
@@ -94,46 +105,21 @@ static void fill_signal(mgmt_signal_t *dst, const subghz_signal_info_t *src)
     snprintf(dst->type, sizeof(dst->type), "%s", src->type[0] ? src->type : "--");
     snprintf(dst->serial, sizeof(dst->serial), "%s", src->serial[0] ? src->serial : "--");
     snprintf(dst->mf, sizeof(dst->mf), "%s", src->mf[0] ? src->mf : "--");
+    snprintf(dst->name, sizeof(dst->name), "%s", src->name[0] ? src->name : "");
 }
 
-/* Re-running subghz_import re-adds every .sub file on the SD card, so the
- * firmware-side list grows with each import. Hide byte-for-byte duplicates
- * (same type/freq/serial/btn/mf) from the UI; storage on JanOS is left intact
- * until the user picks Clear All. Same predicate as coreS3 version. */
-static bool is_duplicate_of_existing_locked(const subghz_mgm_data_t *data,
-                                            const subghz_signal_info_t *p)
-{
-    int freq_x100 = (int)(p->freq * 100.0f + 0.5f);
-    const char *p_type   = p->type[0]   ? p->type   : "--";
-    const char *p_serial = p->serial[0] ? p->serial : "--";
-    const char *p_mf     = p->mf[0]     ? p->mf     : "--";
-
-    for (int j = 0; j < data->sig_count; j++) {
-        const mgmt_signal_t *e = &data->sigs[j];
-        int e_freq_x100 = (int)(e->freq * 100.0f + 0.5f);
-        if (e_freq_x100 != freq_x100) continue;
-        if (e->btn != p->btn) continue;
-        if (strcmp(e->type, p_type) != 0) continue;
-        if (strcmp(e->serial, p_serial) != 0) continue;
-        if (strcmp(e->mf, p_mf) != 0) continue;
-        return true;
-    }
-    return false;
-}
-
-static void append_signal_locked(subghz_mgm_data_t *data,
+static void append_signal_locked(subghz_sd_data_t *data,
                                  const subghz_signal_info_t *src)
 {
     if (data->sig_count >= SUBGHZ_MAX_SIGNALS) {
-        ESP_LOGW(TAG, "Manage list cap reached at %d, dropping rest", data->sig_count);
+        ESP_LOGW(TAG, "SD list cap reached at %d, dropping rest", data->sig_count);
         return;
     }
     if (src->idx <= 0 && !src->is_raw) return;
-    if (is_duplicate_of_existing_locked(data, src)) return;
     fill_signal(&data->sigs[data->sig_count++], src);
 }
 
-static void set_status(subghz_mgm_data_t *data, const char *text, uint16_t color)
+static void set_status(subghz_sd_data_t *data, const char *text, uint16_t color)
 {
     snprintf(data->status_text, sizeof(data->status_text), "%s", text ? text : "");
     data->status_color = color;
@@ -143,29 +129,52 @@ static void set_status(subghz_mgm_data_t *data, const char *text, uint16_t color
 
 static void uart_line_cb(const char *line, void *user_data)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)user_data;
+    subghz_sd_data_t *data = (subghz_sd_data_t *)user_data;
     if (!data || !line) return;
 
-    if (data->collecting_import) {
-        if (strstr(line, "[SUBGHZ_IMPORT_END]")) {
-            data->collecting_import = false;
-            ESP_LOGI(TAG, "Import done: %d signals", data->imported_count);
-            /* Chain a refresh by reusing the same callback. */
+    if (data->clearing_all) {
+        if (strstr(line, "[SUBGHZ_DELETE_ERR]")) {
+            ESP_LOGW(TAG, "Clear-all aborted: %s", line);
+            data->clearing_all = false;
+            set_status(data, "Clear stopped", UI_COLOR_DIMMED);
             request_list_refresh(data);
             return;
         }
-        if (strstr(line, "[SUBGHZ_IMPORT] ")) {
-            data->imported_count++;
+        if (strstr(line, "[SUBGHZ_DELETE]")) {
+            int remaining = -1;
+            const char *r = strstr(line, "remaining=");
+            if (r) remaining = atoi(r + strlen("remaining="));
+            if (remaining > 0) {
+                uart_send_command("subghz_delete 1");
+            } else {
+                data->clearing_all = false;
+                set_status(data, "All cleared", UI_COLOR_HIGHLIGHT);
+                request_list_refresh(data);
+            }
+            return;
         }
         return;
     }
 
     if (strstr(line, "[SUBGHZ_LIST_END]")) {
+        if (strstr(line, "source=sd") == NULL && strstr(line, "source=") != NULL) {
+            /* Wrong source; ignore. */
+            return;
+        }
         data->collecting_list = false;
-        if (data->view == MGM_VIEW_LOADING) {
-            data->view = MGM_VIEW_LIST;
+        if (data->view == SD_VIEW_LOADING) {
+            data->view = SD_VIEW_LIST;
         }
         data->needs_redraw = true;
+        return;
+    }
+
+    if (strstr(line, "[SUBGHZ_RENAME_ERR]")) {
+        set_status(data, "Rename failed", RGB565(255, 80, 80));
+        return;
+    }
+    if (strstr(line, "[SUBGHZ_RENAME]")) {
+        set_status(data, "Renamed", UI_COLOR_HIGHLIGHT);
         return;
     }
 
@@ -181,7 +190,7 @@ static void uart_line_cb(const char *line, void *user_data)
     data->needs_redraw = true;
 }
 
-static void request_list_refresh(subghz_mgm_data_t *data)
+static void request_list_refresh(subghz_sd_data_t *data)
 {
     xSemaphoreTake(data->sig_mtx, portMAX_DELAY);
     data->sig_count = 0;
@@ -190,14 +199,20 @@ static void request_list_refresh(subghz_mgm_data_t *data)
     xSemaphoreGive(data->sig_mtx);
 
     data->collecting_list = true;
-    data->collecting_import = false;
-    uart_send_command("subghz_list");
+    uart_send_command("subghz_list sd");
 }
 
-static void format_row(const mgmt_signal_t *sig, char *out, size_t n)
+static void format_row(const sd_signal_t *sig, char *out, size_t n)
 {
     int whole = (int)sig->freq;
     int frac  = ((int)(sig->freq * 100.0f + 0.5f)) % 100;
+
+    if (sig->name[0]) {
+        /* Prefer the user-renameable name as the primary label. */
+        snprintf(out, n, "%d %.16s %d.%02d", sig->idx, sig->name, whole, frac);
+        return;
+    }
+
     if (sig->is_raw) {
         snprintf(out, n, "%d RAW %d.%02d %.10s",
                  sig->idx, whole, frac, sig->mf);
@@ -209,7 +224,7 @@ static void format_row(const mgmt_signal_t *sig, char *out, size_t n)
     }
 }
 
-static void redraw_signal_row(subghz_mgm_data_t *data, int sig_idx)
+static void redraw_signal_row(subghz_sd_data_t *data, int sig_idx)
 {
     int row_on_screen = sig_idx - data->scroll_offset;
     if (row_on_screen < 0 || row_on_screen >= VISIBLE_ITEMS) return;
@@ -224,7 +239,7 @@ static void redraw_signal_row(subghz_mgm_data_t *data, int sig_idx)
     ui_draw_menu_item(ui_row, buf, selected, false, false);
 }
 
-static void redraw_list_window(subghz_mgm_data_t *data)
+static void redraw_list_window(subghz_sd_data_t *data)
 {
     for (int i = 0; i < VISIBLE_ITEMS; i++) {
         int sig_idx = data->scroll_offset + i;
@@ -249,19 +264,19 @@ static void redraw_list_window(subghz_mgm_data_t *data)
 
 static void draw_list_view(screen_t *self)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)self->user_data;
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
 
     ui_clear();
     char title[24];
-    snprintf(title, sizeof(title), "Manage (%d)", data->sig_count);
+    snprintf(title, sizeof(title), "SD Signals (%d)", data->sig_count);
     ui_draw_title(title);
 
-    if (data->view == MGM_VIEW_IMPORTING) {
-        ui_print_center(3, "Importing from SD...", UI_COLOR_HIGHLIGHT);
+    if (data->clearing_all) {
+        ui_print_center(3, "Clearing SD...", UI_COLOR_HIGHLIGHT);
     } else if (data->sig_count == 0) {
-        ui_print_center(3, data->view == MGM_VIEW_LOADING
+        ui_print_center(3, data->view == SD_VIEW_LOADING
                               ? "Loading..."
-                              : "No stored signals", UI_COLOR_DIMMED);
+                              : "No signals on SD", UI_COLOR_DIMMED);
     } else {
         redraw_list_window(data);
     }
@@ -270,29 +285,63 @@ static void draw_list_view(screen_t *self)
         ui_print(0, 6, data->status_text, data->status_color);
     }
 
-    ui_draw_status("ENT:Del E:Exp I:Imp X:Clr");
+    ui_draw_status("ENT:Act X:Clr ESC:Back");
+}
+
+static void draw_actions_view(screen_t *self)
+{
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
+    ui_clear();
+    ui_draw_title("Signal Action");
+
+    if (data->selected_index < data->sig_count) {
+        const sd_signal_t *sig = &data->sigs[data->selected_index];
+        char l1[40];
+        int whole = (int)sig->freq;
+        int frac  = ((int)(sig->freq * 100.0f + 0.5f)) % 100;
+        if (sig->name[0]) {
+            snprintf(l1, sizeof(l1), "#%d %.16s %d.%02d",
+                     sig->idx, sig->name, whole, frac);
+        } else {
+            snprintf(l1, sizeof(l1), "#%d %.10s %d.%02d",
+                     sig->idx, sig->type, whole, frac);
+        }
+        ui_print_center(2, l1, UI_COLOR_HIGHLIGHT);
+    }
+
+    ui_draw_menu_item(3, "Rename",   data->action_choice == SD_ACTION_RENAME,   false, false);
+    ui_draw_menu_item(4, "Delete",   data->action_choice == SD_ACTION_DELETE,   false, false);
+    ui_draw_menu_item(5, "Transmit", data->action_choice == SD_ACTION_TRANSMIT, false, false);
+    ui_draw_menu_item(6, "Cancel",   data->action_choice == SD_ACTION_CANCEL,   false, false);
+
+    ui_draw_status("UP/DN ENT:Pick ESC:Cancel");
 }
 
 static void draw_confirm_view(screen_t *self)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)self->user_data;
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
     ui_clear();
-    ui_draw_title(data->view == MGM_VIEW_CONFIRM_DELETE ? "Delete signal?" : "Clear ALL?");
+    ui_draw_title(data->view == SD_VIEW_CONFIRM_DELETE ? "Delete signal?" : "Clear ALL?");
 
-    if (data->view == MGM_VIEW_CONFIRM_DELETE &&
+    if (data->view == SD_VIEW_CONFIRM_DELETE &&
         data->selected_index < data->sig_count) {
-        const mgmt_signal_t *sig = &data->sigs[data->selected_index];
+        const sd_signal_t *sig = &data->sigs[data->selected_index];
         char l1[40], l2[40];
         int whole = (int)sig->freq;
         int frac  = ((int)(sig->freq * 100.0f + 0.5f)) % 100;
-        snprintf(l1, sizeof(l1), "#%d %.10s %d.%02d", sig->idx, sig->type, whole, frac);
-        snprintf(l2, sizeof(l2), "%.14s %.14s",
-                 sig->mf[0] ? sig->mf : "--", sig->serial[0] ? sig->serial : "--");
+        if (sig->name[0]) {
+            snprintf(l1, sizeof(l1), "#%d %.16s", sig->idx, sig->name);
+            snprintf(l2, sizeof(l2), "%.10s %d.%02d", sig->type, whole, frac);
+        } else {
+            snprintf(l1, sizeof(l1), "#%d %.10s %d.%02d", sig->idx, sig->type, whole, frac);
+            snprintf(l2, sizeof(l2), "%.14s %.14s",
+                     sig->mf[0] ? sig->mf : "--", sig->serial[0] ? sig->serial : "--");
+        }
         ui_print_center(2, l1, UI_COLOR_HIGHLIGHT);
         ui_print_center(3, l2, UI_COLOR_DIMMED);
-    } else if (data->view == MGM_VIEW_CONFIRM_CLEAR) {
-        ui_print_center(2, "Delete ALL stored", UI_COLOR_HIGHLIGHT);
-        ui_print_center(3, "signals?", UI_COLOR_HIGHLIGHT);
+    } else if (data->view == SD_VIEW_CONFIRM_CLEAR) {
+        ui_print_center(2, "Delete ALL .sub files", UI_COLOR_HIGHLIGHT);
+        ui_print_center(3, "on the SD card?", UI_COLOR_HIGHLIGHT);
     }
 
     ui_draw_menu_item(5, "Yes",    data->confirm_choice == 0, false, false);
@@ -303,15 +352,17 @@ static void draw_confirm_view(screen_t *self)
 
 static void draw_screen(screen_t *self)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)self->user_data;
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
     switch (data->view) {
-        case MGM_VIEW_LOADING:
-        case MGM_VIEW_LIST:
-        case MGM_VIEW_IMPORTING:
+        case SD_VIEW_LOADING:
+        case SD_VIEW_LIST:
             draw_list_view(self);
             break;
-        case MGM_VIEW_CONFIRM_DELETE:
-        case MGM_VIEW_CONFIRM_CLEAR:
+        case SD_VIEW_ACTIONS:
+            draw_actions_view(self);
+            break;
+        case SD_VIEW_CONFIRM_DELETE:
+        case SD_VIEW_CONFIRM_CLEAR:
             draw_confirm_view(self);
             break;
     }
@@ -319,26 +370,17 @@ static void draw_screen(screen_t *self)
 
 static void on_tick(screen_t *self)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)self->user_data;
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
     if (!data->needs_redraw) return;
     data->needs_redraw = false;
 
-    if (data->view == MGM_VIEW_IMPORTING && !data->collecting_import) {
-        /* Import finished - request_list_refresh moved us back to LOADING. */
-        data->view = MGM_VIEW_LOADING;
-        char buf[32];
-        snprintf(buf, sizeof(buf), "Imported %d",
-                 data->imported_count);
-        set_status(data, buf, UI_COLOR_HIGHLIGHT);
-    }
-
-    if (data->view != MGM_VIEW_CONFIRM_DELETE &&
-        data->view != MGM_VIEW_CONFIRM_CLEAR) {
+    /* Only repaint backgrounds for views driven by async events. */
+    if (data->view == SD_VIEW_LOADING || data->view == SD_VIEW_LIST) {
         draw_list_view(self);
     }
 }
 
-static void redraw_two_rows(subghz_mgm_data_t *data, int old_idx, int new_idx)
+static void redraw_two_rows(subghz_sd_data_t *data, int old_idx, int new_idx)
 {
     if (old_idx >= 0) redraw_signal_row(data, old_idx);
     if (new_idx >= 0) redraw_signal_row(data, new_idx);
@@ -346,44 +388,103 @@ static void redraw_two_rows(subghz_mgm_data_t *data, int old_idx, int new_idx)
 
 static void perform_delete(screen_t *self)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)self->user_data;
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
     if (data->selected_index >= data->sig_count) return;
     int idx = data->sigs[data->selected_index].idx;
 
     char cmd[32];
     snprintf(cmd, sizeof(cmd), "subghz_delete %d", idx);
     uart_send_command(cmd);
-    ESP_LOGI(TAG, "Sent subghz_delete %d", idx);
+    ESP_LOGI(TAG, "Sent: %s", cmd);
 
     char status[32];
     snprintf(status, sizeof(status), "Deleted #%d", idx);
     set_status(data, status, UI_COLOR_TITLE);
 
-    data->view = MGM_VIEW_LOADING;
+    data->view = SD_VIEW_LOADING;
     request_list_refresh(data);
     draw_screen(self);
 }
 
 static void perform_clear(screen_t *self)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)self->user_data;
-    uart_send_command("subghz_clear");
-    ESP_LOGI(TAG, "Sent subghz_clear");
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
 
-    xSemaphoreTake(data->sig_mtx, portMAX_DELAY);
-    data->sig_count = 0;
-    data->selected_index = 0;
-    data->scroll_offset = 0;
-    xSemaphoreGive(data->sig_mtx);
+    data->clearing_all = true;
+    uart_send_command("subghz_delete 1");
+    ESP_LOGI(TAG, "Clear-all started (iterative subghz_delete 1)");
 
-    set_status(data, "All cleared", UI_COLOR_HIGHLIGHT);
-    data->view = MGM_VIEW_LIST;
+    set_status(data, "Clearing SD...", UI_COLOR_HIGHLIGHT);
+    data->view = SD_VIEW_LOADING;
     draw_screen(self);
+}
+
+static void perform_transmit(screen_t *self)
+{
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
+    if (data->selected_index >= data->sig_count) return;
+    int idx = data->sigs[data->selected_index].idx;
+
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "subghz_tx %d sd", idx);
+    uart_send_command(cmd);
+    ESP_LOGI(TAG, "Sent: %s", cmd);
+
+    char status[32];
+    snprintf(status, sizeof(status), "Sent #%d", idx);
+    set_status(data, status, UI_COLOR_HIGHLIGHT);
+
+    data->view = SD_VIEW_LIST;
+    draw_screen(self);
+}
+
+static void on_rename_submit(const char *text, void *user_data)
+{
+    (void)user_data;
+    if (!s_current) {
+        screen_manager_pop();
+        return;
+    }
+    subghz_sd_data_t *data = s_current;
+
+    if (data->selected_index >= data->sig_count) {
+        screen_manager_pop();
+        return;
+    }
+    int idx = data->sigs[data->selected_index].idx;
+
+    char cmd[80];
+    snprintf(cmd, sizeof(cmd), "subghz_rename %d %s", idx, text ? text : "");
+    uart_send_command(cmd);
+    ESP_LOGI(TAG, "Sent: %s", cmd);
+
+    set_status(data, "Renaming...", UI_COLOR_HIGHLIGHT);
+    data->view = SD_VIEW_LOADING;
+    request_list_refresh(data);
+
+    screen_manager_pop();
+}
+
+static void enter_rename(screen_t *self)
+{
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
+    if (data->selected_index >= data->sig_count) return;
+
+    text_input_params_t *p = calloc(1, sizeof(text_input_params_t));
+    if (!p) return;
+    p->title = "Rename Signal";
+    p->hint = "a-z 0-9 _ -";
+    p->on_submit = on_rename_submit;
+    p->user_data = NULL;
+    p->allow_empty = false;
+
+    data->view = SD_VIEW_LIST;
+    screen_manager_push(text_input_screen_create, p);
 }
 
 static void on_key_list(screen_t *self, key_code_t key)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)self->user_data;
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
 
     switch (key) {
         case KEY_UP:
@@ -419,35 +520,17 @@ static void on_key_list(screen_t *self, key_code_t key)
             break;
 
         case KEY_ENTER:
+        case KEY_SPACE:
             if (data->sig_count == 0) break;
-            data->confirm_choice = 1; /* Default to Cancel - delete is destructive */
-            data->view = MGM_VIEW_CONFIRM_DELETE;
-            draw_confirm_view(self);
-            break;
-
-        case KEY_E:
-            uart_send_command("subghz_export all");
-            ESP_LOGI(TAG, "Sent subghz_export all");
-            set_status(data, "Export sent", UI_COLOR_TITLE);
-            draw_list_view(self);
-            break;
-
-        case KEY_I:
-            if (data->collecting_import) break;
-            data->imported_count = 0;
-            data->collecting_import = true;
-            data->collecting_list = false;
-            data->view = MGM_VIEW_IMPORTING;
-            uart_send_command("subghz_import all");
-            ESP_LOGI(TAG, "Sent subghz_import all");
-            set_status(data, "Importing...", UI_COLOR_HIGHLIGHT);
-            draw_list_view(self);
+            data->action_choice = SD_ACTION_TRANSMIT;
+            data->view = SD_VIEW_ACTIONS;
+            draw_actions_view(self);
             break;
 
         case KEY_X:
             if (data->sig_count == 0) break;
-            data->confirm_choice = 1; /* Default to Cancel */
-            data->view = MGM_VIEW_CONFIRM_CLEAR;
+            data->confirm_choice = 1; /* Default = Cancel */
+            data->view = SD_VIEW_CONFIRM_CLEAR;
             draw_confirm_view(self);
             break;
 
@@ -462,9 +545,59 @@ static void on_key_list(screen_t *self, key_code_t key)
     }
 }
 
+static void on_key_actions(screen_t *self, key_code_t key)
+{
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
+
+    switch (key) {
+        case KEY_UP:
+            data->action_choice = (data->action_choice + SD_ACTION_COUNT - 1)
+                                   % SD_ACTION_COUNT;
+            draw_actions_view(self);
+            break;
+
+        case KEY_DOWN:
+            data->action_choice = (data->action_choice + 1) % SD_ACTION_COUNT;
+            draw_actions_view(self);
+            break;
+
+        case KEY_ENTER:
+        case KEY_SPACE:
+            switch (data->action_choice) {
+                case SD_ACTION_RENAME:
+                    enter_rename(self);
+                    break;
+                case SD_ACTION_DELETE:
+                    data->confirm_choice = 1; /* Default = Cancel */
+                    data->view = SD_VIEW_CONFIRM_DELETE;
+                    draw_confirm_view(self);
+                    break;
+                case SD_ACTION_TRANSMIT:
+                    perform_transmit(self);
+                    break;
+                case SD_ACTION_CANCEL:
+                default:
+                    data->view = SD_VIEW_LIST;
+                    draw_list_view(self);
+                    break;
+            }
+            break;
+
+        case KEY_ESC:
+        case KEY_BACKSPACE:
+        case KEY_Q:
+            data->view = SD_VIEW_LIST;
+            draw_list_view(self);
+            break;
+
+        default:
+            break;
+    }
+}
+
 static void on_key_confirm(screen_t *self, key_code_t key)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)self->user_data;
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
 
     switch (key) {
         case KEY_UP:
@@ -476,10 +609,10 @@ static void on_key_confirm(screen_t *self, key_code_t key)
         case KEY_ENTER:
         case KEY_SPACE:
             if (data->confirm_choice == 0) {
-                if (data->view == MGM_VIEW_CONFIRM_DELETE) perform_delete(self);
-                else                                       perform_clear(self);
+                if (data->view == SD_VIEW_CONFIRM_DELETE) perform_delete(self);
+                else                                      perform_clear(self);
             } else {
-                data->view = MGM_VIEW_LIST;
+                data->view = SD_VIEW_LIST;
                 draw_list_view(self);
             }
             break;
@@ -487,7 +620,7 @@ static void on_key_confirm(screen_t *self, key_code_t key)
         case KEY_ESC:
         case KEY_BACKSPACE:
         case KEY_Q:
-            data->view = MGM_VIEW_LIST;
+            data->view = SD_VIEW_LIST;
             draw_list_view(self);
             break;
 
@@ -498,18 +631,26 @@ static void on_key_confirm(screen_t *self, key_code_t key)
 
 static void on_key(screen_t *self, key_code_t key)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)self->user_data;
-    if (data->view == MGM_VIEW_CONFIRM_DELETE ||
-        data->view == MGM_VIEW_CONFIRM_CLEAR) {
-        on_key_confirm(self, key);
-    } else {
-        on_key_list(self, key);
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
+    switch (data->view) {
+        case SD_VIEW_ACTIONS:
+            on_key_actions(self, key);
+            break;
+        case SD_VIEW_CONFIRM_DELETE:
+        case SD_VIEW_CONFIRM_CLEAR:
+            on_key_confirm(self, key);
+            break;
+        case SD_VIEW_LOADING:
+        case SD_VIEW_LIST:
+        default:
+            on_key_list(self, key);
+            break;
     }
 }
 
 static void on_destroy(screen_t *self)
 {
-    subghz_mgm_data_t *data = (subghz_mgm_data_t *)self->user_data;
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
     if (data) {
         uart_clear_line_callback();
         if (data->sig_mtx) {
@@ -524,6 +665,13 @@ static void on_destroy(screen_t *self)
 
 static void on_resume(screen_t *self)
 {
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
+    /* Coming back from text-input rename or any child screen - refresh. */
+    if (data->view != SD_VIEW_LOADING) {
+        data->view = SD_VIEW_LOADING;
+    }
+    uart_register_line_callback(uart_line_cb, data);
+    request_list_refresh(data);
     draw_screen(self);
 }
 
@@ -534,14 +682,14 @@ screen_t* subghz_manage_screen_create(void *params)
     screen_t *screen = screen_alloc();
     if (!screen) return NULL;
 
-    subghz_mgm_data_t *data = calloc(1, sizeof(subghz_mgm_data_t));
+    subghz_sd_data_t *data = calloc(1, sizeof(subghz_sd_data_t));
     if (!data) {
         free(screen);
         return NULL;
     }
 
     data->sig_mtx = xSemaphoreCreateMutex();
-    data->view = MGM_VIEW_LOADING;
+    data->view = SD_VIEW_LOADING;
     data->collecting_list = true;
     data->self = screen;
     s_current = data;
@@ -555,11 +703,11 @@ screen_t* subghz_manage_screen_create(void *params)
 
     draw_screen(screen);
 
-    /* Defensive: stop any prior subghz_rx/jam/etc. and request the list. */
+    /* Defensive: stop any prior subghz_rx/jam/etc. and request the SD list. */
     uart_send_command("subghz_stop");
     uart_register_line_callback(uart_line_cb, data);
-    uart_send_command("subghz_list");
+    uart_send_command("subghz_list sd");
 
-    ESP_LOGI(TAG, "Manage screen created");
+    ESP_LOGI(TAG, "SD Signals screen created");
     return screen;
 }

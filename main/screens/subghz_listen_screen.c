@@ -2,16 +2,15 @@
  * @file subghz_listen_screen.c
  * @brief Sub-GHz Listen (RX) screen
  *
- * UART behaviour is cloned from coreS3/main/screens/subghz_listen_screen.c:
+ * UART behaviour:
  *   subghz_freq <f>
  *   subghz_rx           (or subghz_rx raw)
  *   subghz_stop         on exit/stop
  *
- * Captured-signal parsing uses subghz_parser.[ch] (cloned verbatim from coreS3).
- * Duplicate-merge logic mirrors merge_duplicate_signal() from coreS3's Listen.
- *
- * The captured-signal list uses the Cardputer 5-row scrollable list idiom with
- * the "two-row redraw" optimisation when the user navigates.
+ * Captured signals live in the firmware mem cache. ENTER on a selected row
+ * opens a per-item action menu (Save to SD / Transmit / Cancel); SPACE
+ * toggles capture start/stop. ESC with captures in the list shows a
+ * leave-warning confirm (signals in mem are lost on reboot or subghz_clear).
  */
 
 #include "subghz_listen_screen.h"
@@ -25,11 +24,26 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 static const char *TAG = "SUBGHZ_LISTEN";
 
 #define VISIBLE_ITEMS       5
 #define SUBGHZ_MAX_SIGNALS  128
+#define TOAST_BUF_LEN       32
+
+typedef enum {
+    LISTEN_VIEW_LIST = 0,
+    LISTEN_VIEW_ACTIONS,
+    LISTEN_VIEW_LEAVE_CONFIRM,
+} listen_view_t;
+
+typedef enum {
+    LISTEN_ACTION_SAVE = 0,
+    LISTEN_ACTION_TX,
+    LISTEN_ACTION_CANCEL,
+    LISTEN_ACTION_COUNT,
+} listen_action_t;
 
 typedef struct {
     int   idx;
@@ -39,6 +53,7 @@ typedef struct {
     int   btn;
     int   cnt;
     char  mf[32];
+    char  name[40];
     bool  is_raw;
 } subghz_signal_t;
 
@@ -56,6 +71,15 @@ typedef struct {
     bool  follow_latest;
     bool  needs_redraw;
     int   prev_count_drawn;
+
+    listen_view_t view;
+    int  action_choice;     /* 0=Save, 1=TX, 2=Cancel */
+    int  confirm_choice;    /* 0=Cancel, 1=Leave anyway */
+    bool was_running_pre_menu;
+
+    char toast_text[TOAST_BUF_LEN];
+    bool toast_visible;
+
     screen_t *self;
 } subghz_listen_data_t;
 
@@ -67,8 +91,12 @@ static float s_pending_freq = 0.0f;
 static bool  s_pending_autostart = false;
 
 static void draw_screen(screen_t *self);
+static void draw_list_view(screen_t *self);
+static void draw_actions_view(screen_t *self);
+static void draw_leave_confirm_view(screen_t *self);
 static void redraw_signal_row(subghz_listen_data_t *data, int sig_idx);
 static void redraw_status_row(subghz_listen_data_t *data);
+static void redraw_list_window(subghz_listen_data_t *data);
 static void start_rx(screen_t *self);
 static void stop_rx(screen_t *self);
 
@@ -83,9 +111,9 @@ static void fill_signal(subghz_signal_t *dst, const subghz_signal_info_t *src)
     snprintf(dst->type, sizeof(dst->type), "%s", src->type[0] ? src->type : "--");
     snprintf(dst->serial, sizeof(dst->serial), "%s", src->serial[0] ? src->serial : "--");
     snprintf(dst->mf, sizeof(dst->mf), "%s", src->mf[0] ? src->mf : "--");
+    snprintf(dst->name, sizeof(dst->name), "%s", src->name[0] ? src->name : "");
 }
 
-/* Mirrors merge_duplicate_signal() in coreS3 subghz_listen_screen.c */
 static bool merge_duplicate_signal_locked(subghz_listen_data_t *data,
                                           const subghz_signal_info_t *src)
 {
@@ -107,7 +135,6 @@ static void append_signal_locked(subghz_listen_data_t *data,
                                  const subghz_signal_info_t *src)
 {
     if (data->sig_count >= SUBGHZ_MAX_SIGNALS) {
-        /* Drop oldest by shifting; rare. */
         memmove(&data->sigs[0], &data->sigs[1],
                 sizeof(data->sigs[0]) * (SUBGHZ_MAX_SIGNALS - 1));
         data->sig_count--;
@@ -118,19 +145,16 @@ static void append_signal_locked(subghz_listen_data_t *data,
 static void uart_line_cb(const char *line, void *user_data)
 {
     subghz_listen_data_t *data = (subghz_listen_data_t *)user_data;
-    if (!data || !data->running) return;
+    if (!data) return;
 
-    /* RSSI flood: skip without further work */
     int rssi_ignored;
     if (subghz_parse_rssi_line(line, &rssi_ignored)) return;
 
     subghz_signal_info_t parsed;
     if (!subghz_parse_signal_line(line, &parsed)) return;
 
-    /* Skip list entries (Listen does not request subghz_list) */
     if (parsed.kind == SUBGHZ_SIGNAL_KIND_LIST) return;
 
-    /* Raw / decoded toggle behaviour mirrors coreS3 Listen */
     if (!data->raw_mode && parsed.kind == SUBGHZ_SIGNAL_KIND_RAW) return;
     if (data->raw_mode && parsed.kind == SUBGHZ_SIGNAL_KIND_RX_DUP) return;
 
@@ -147,7 +171,6 @@ static void format_row(const subghz_signal_t *sig, char *out, size_t n)
 {
     int whole = (int)sig->freq;
     int frac  = ((int)(sig->freq * 100.0f + 0.5f)) % 100;
-    /* Compact row that fits in 30 cols including the ENTER indicator. */
     if (sig->is_raw) {
         snprintf(out, n, "%d RAW %d.%02d %.10s",
                  sig->idx, whole, frac, sig->mf);
@@ -181,12 +204,16 @@ static void redraw_status_row(subghz_listen_data_t *data)
     int y = 1 * 16;
     display_fill_rect(0, y, DISPLAY_WIDTH, 16, UI_COLOR_BG);
 
-    char left[20];
-    int whole = (int)data->freq_mhz;
-    int frac  = ((int)(data->freq_mhz * 100.0f + 0.5f)) % 100;
-    snprintf(left, sizeof(left), "%d.%02d %s", whole, frac,
-             data->raw_mode ? "RAW" : "Dec");
-    ui_print(0, 1, left, data->running ? UI_COLOR_TITLE : UI_COLOR_TEXT);
+    if (data->toast_visible) {
+        ui_print(0, 1, data->toast_text, UI_COLOR_HIGHLIGHT);
+    } else {
+        char left[20];
+        int whole = (int)data->freq_mhz;
+        int frac  = ((int)(data->freq_mhz * 100.0f + 0.5f)) % 100;
+        snprintf(left, sizeof(left), "%d.%02d %s", whole, frac,
+                 data->raw_mode ? "RAW" : "Dec");
+        ui_print(0, 1, left, data->running ? UI_COLOR_TITLE : UI_COLOR_TEXT);
+    }
 
     char right[16];
     snprintf(right, sizeof(right), "%c %d sig",
@@ -211,7 +238,6 @@ static void redraw_list_window(subghz_listen_data_t *data)
         }
     }
 
-    /* Scroll indicators */
     display_fill_rect(DISPLAY_WIDTH - 16, 2 * 16, 16, 16, UI_COLOR_BG);
     display_fill_rect(DISPLAY_WIDTH - 16, (2 + VISIBLE_ITEMS - 1) * 16, 16, 16, UI_COLOR_BG);
     if (data->scroll_offset > 0) {
@@ -222,7 +248,7 @@ static void redraw_list_window(subghz_listen_data_t *data)
     }
 }
 
-static void draw_screen(screen_t *self)
+static void draw_list_view(screen_t *self)
 {
     subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
 
@@ -235,19 +261,73 @@ static void draw_screen(screen_t *self)
         ui_print_center(4, "No signals captured", UI_COLOR_DIMMED);
     }
 
-    ui_draw_status("ENT:Strt F:Frq R:Raw ESC:Back");
+    ui_draw_status("ENT:Act SP:Run F:Frq R:Raw");
+}
+
+static void draw_actions_view(screen_t *self)
+{
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+    ui_clear();
+    ui_draw_title("Signal Action");
+
+    if (data->selected_index < data->sig_count) {
+        const subghz_signal_t *sig = &data->sigs[data->selected_index];
+        char l1[40], l2[40];
+        int whole = (int)sig->freq;
+        int frac  = ((int)(sig->freq * 100.0f + 0.5f)) % 100;
+        snprintf(l1, sizeof(l1), "#%d %.10s %d.%02d", sig->idx, sig->type, whole, frac);
+        snprintf(l2, sizeof(l2), "%.14s %.14s",
+                 sig->mf[0] ? sig->mf : "--", sig->serial[0] ? sig->serial : "--");
+        ui_print_center(2, l1, UI_COLOR_HIGHLIGHT);
+        ui_print_center(3, l2, UI_COLOR_DIMMED);
+    }
+
+    ui_draw_menu_item(4, "Save to SD", data->action_choice == LISTEN_ACTION_SAVE,   false, false);
+    ui_draw_menu_item(5, "Transmit",   data->action_choice == LISTEN_ACTION_TX,     false, false);
+    ui_draw_menu_item(6, "Cancel",     data->action_choice == LISTEN_ACTION_CANCEL, false, false);
+
+    ui_draw_status("UP/DN ENT:Pick ESC:Cancel");
+}
+
+static void draw_leave_confirm_view(screen_t *self)
+{
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+    ui_clear();
+    ui_draw_title("Leave screen?");
+
+    ui_print_center(2, "Captures live in mem.", UI_COLOR_TEXT);
+    ui_print_center(3, "Save to SD first or", UI_COLOR_DIMMED);
+    ui_print_center(4, "they may be lost.", UI_COLOR_DIMMED);
+
+    ui_draw_menu_item(5, "Cancel",       data->confirm_choice == 0, false, false);
+    ui_draw_menu_item(6, "Leave anyway", data->confirm_choice == 1, false, false);
+
+    ui_draw_status("UP/DN ENT:Confirm ESC:Cancel");
+}
+
+static void draw_screen(screen_t *self)
+{
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+    switch (data->view) {
+        case LISTEN_VIEW_LIST:          draw_list_view(self); break;
+        case LISTEN_VIEW_ACTIONS:       draw_actions_view(self); break;
+        case LISTEN_VIEW_LEAVE_CONFIRM: draw_leave_confirm_view(self); break;
+    }
 }
 
 static void on_tick(screen_t *self)
 {
     subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+    if (data->view != LISTEN_VIEW_LIST) {
+        data->needs_redraw = false;
+        return;
+    }
     if (!data->needs_redraw) return;
     data->needs_redraw = false;
 
     xSemaphoreTake(data->sig_mtx, portMAX_DELAY);
     int total = data->sig_count;
 
-    /* Follow-latest: keep cursor pinned to the newest signal. */
     if (data->follow_latest && total > 0) {
         data->selected_index = total - 1;
         int max_scroll = total - VISIBLE_ITEMS;
@@ -256,7 +336,6 @@ static void on_tick(screen_t *self)
     }
     xSemaphoreGive(data->sig_mtx);
 
-    /* If the count changed, repaint the visible window + status row. */
     redraw_status_row(data);
     redraw_list_window(data);
     data->prev_count_drawn = total;
@@ -268,12 +347,29 @@ static void redraw_two_rows(subghz_listen_data_t *data, int old_idx, int new_idx
     if (new_idx >= 0) redraw_signal_row(data, new_idx);
 }
 
+static void show_toast(subghz_listen_data_t *data, const char *fmt, ...)
+                       __attribute__((format(printf, 2, 3)));
+
+static void show_toast(subghz_listen_data_t *data, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(data->toast_text, sizeof(data->toast_text), fmt, ap);
+    va_end(ap);
+    data->toast_visible = true;
+}
+
+static void clear_toast(subghz_listen_data_t *data)
+{
+    data->toast_visible = false;
+    data->toast_text[0] = '\0';
+}
+
 static void start_rx(screen_t *self)
 {
     subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
     if (data->running) return;
 
-    /* Defensive stop in case any prior subghz_* task is still running. */
     uart_send_command("subghz_stop");
 
     char cmd[32];
@@ -287,7 +383,7 @@ static void start_rx(screen_t *self)
     else                uart_send_command("subghz_rx");
 
     ESP_LOGI(TAG, "Listen started (%.2f MHz, raw=%d)", data->freq_mhz, data->raw_mode);
-    redraw_status_row(data);
+    if (data->view == LISTEN_VIEW_LIST) redraw_status_row(data);
 }
 
 static void stop_rx(screen_t *self)
@@ -299,7 +395,62 @@ static void stop_rx(screen_t *self)
     uart_clear_line_callback();
     data->running = false;
     ESP_LOGI(TAG, "Listen stopped");
-    redraw_status_row(data);
+    if (data->view == LISTEN_VIEW_LIST) redraw_status_row(data);
+}
+
+static void enter_actions_view(screen_t *self)
+{
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+    if (data->sig_count == 0) return;
+    if (data->selected_index >= data->sig_count) return;
+
+    data->was_running_pre_menu = data->running;
+    if (data->running) stop_rx(self);
+
+    data->action_choice = LISTEN_ACTION_SAVE;
+    data->view = LISTEN_VIEW_ACTIONS;
+    draw_actions_view(self);
+}
+
+static void leave_menu_resume_capture(screen_t *self)
+{
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+    data->view = LISTEN_VIEW_LIST;
+    if (data->was_running_pre_menu && !data->running) {
+        start_rx(self);
+    }
+    data->was_running_pre_menu = false;
+    draw_list_view(self);
+}
+
+static void perform_save_to_sd(screen_t *self)
+{
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+    if (data->selected_index >= data->sig_count) return;
+    int mem_idx = data->sigs[data->selected_index].idx;
+
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "subghz_save %d", mem_idx);
+    uart_send_command(cmd);
+    ESP_LOGI(TAG, "Sent: %s", cmd);
+
+    show_toast(data, "Saved #%d to SD", mem_idx);
+    leave_menu_resume_capture(self);
+}
+
+static void perform_transmit_mem(screen_t *self)
+{
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+    if (data->selected_index >= data->sig_count) return;
+    int mem_idx = data->sigs[data->selected_index].idx;
+
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "subghz_tx %d mem", mem_idx);
+    uart_send_command(cmd);
+    ESP_LOGI(TAG, "Sent: %s", cmd);
+
+    show_toast(data, "Sent #%d", mem_idx);
+    leave_menu_resume_capture(self);
 }
 
 static void on_freq_picked(float freq, void *user_data)
@@ -314,17 +465,26 @@ static void on_freq_picked(float freq, void *user_data)
     }
     s_current->freq_mhz = freq;
     ESP_LOGI(TAG, "Listen freq set to %.2f MHz", freq);
-    /* draw via on_resume */
-    (void)was_running; /* user must press Start again, mirroring coreS3 behaviour */
+    (void)was_running;
 }
 
-static void on_key(screen_t *self, key_code_t key)
+static void on_key_list(screen_t *self, key_code_t key)
 {
     subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
 
     switch (key) {
         case KEY_ENTER:
+            if (data->sig_count > 0) {
+                clear_toast(data);
+                enter_actions_view(self);
+            } else {
+                if (data->running) stop_rx(self);
+                else               start_rx(self);
+            }
+            break;
+
         case KEY_SPACE:
+            clear_toast(data);
             if (data->running) stop_rx(self);
             else               start_rx(self);
             break;
@@ -378,7 +538,6 @@ static void on_key(screen_t *self, key_code_t key)
                     data->selected_index = new_idx;
                     redraw_two_rows(data, old, new_idx);
                 }
-                /* Snap follow-latest when we land on the newest signal. */
                 if (new_idx == data->sig_count - 1) {
                     data->follow_latest = true;
                 }
@@ -390,16 +549,108 @@ static void on_key(screen_t *self, key_code_t key)
         case KEY_ESC:
         case KEY_Q:
         case KEY_BACKSPACE:
-            if (data->running) {
-                uart_send_command("subghz_stop");
-                uart_clear_line_callback();
-                data->running = false;
+            if (data->sig_count > 0) {
+                data->confirm_choice = 0;
+                data->view = LISTEN_VIEW_LEAVE_CONFIRM;
+                draw_leave_confirm_view(self);
+            } else {
+                if (data->running) {
+                    uart_send_command("subghz_stop");
+                    uart_clear_line_callback();
+                    data->running = false;
+                }
+                screen_manager_pop();
             }
-            screen_manager_pop();
             break;
 
         default:
             break;
+    }
+}
+
+static void on_key_actions(screen_t *self, key_code_t key)
+{
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+
+    switch (key) {
+        case KEY_UP:
+            data->action_choice = (data->action_choice + LISTEN_ACTION_COUNT - 1)
+                                   % LISTEN_ACTION_COUNT;
+            draw_actions_view(self);
+            break;
+
+        case KEY_DOWN:
+            data->action_choice = (data->action_choice + 1) % LISTEN_ACTION_COUNT;
+            draw_actions_view(self);
+            break;
+
+        case KEY_ENTER:
+        case KEY_SPACE:
+            switch (data->action_choice) {
+                case LISTEN_ACTION_SAVE:   perform_save_to_sd(self); break;
+                case LISTEN_ACTION_TX:     perform_transmit_mem(self); break;
+                case LISTEN_ACTION_CANCEL:
+                default:                   leave_menu_resume_capture(self); break;
+            }
+            break;
+
+        case KEY_ESC:
+        case KEY_BACKSPACE:
+        case KEY_Q:
+            leave_menu_resume_capture(self);
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void on_key_leave_confirm(screen_t *self, key_code_t key)
+{
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+
+    switch (key) {
+        case KEY_UP:
+        case KEY_DOWN:
+            data->confirm_choice = data->confirm_choice ? 0 : 1;
+            draw_leave_confirm_view(self);
+            break;
+
+        case KEY_ENTER:
+        case KEY_SPACE:
+            if (data->confirm_choice == 1) {
+                if (data->running) {
+                    uart_send_command("subghz_stop");
+                    uart_clear_line_callback();
+                    data->running = false;
+                }
+                screen_manager_pop();
+            } else {
+                data->view = LISTEN_VIEW_LIST;
+                draw_list_view(self);
+            }
+            break;
+
+        case KEY_ESC:
+        case KEY_BACKSPACE:
+        case KEY_Q:
+            data->view = LISTEN_VIEW_LIST;
+            draw_list_view(self);
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void on_key(screen_t *self, key_code_t key)
+{
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
+    switch (data->view) {
+        case LISTEN_VIEW_ACTIONS:       on_key_actions(self, key); break;
+        case LISTEN_VIEW_LEAVE_CONFIRM: on_key_leave_confirm(self, key); break;
+        case LISTEN_VIEW_LIST:
+        default:                        on_key_list(self, key); break;
     }
 }
 
@@ -444,6 +695,7 @@ screen_t* subghz_listen_screen_create(void *params)
     data->running = false;
     data->raw_mode = false;
     data->follow_latest = true;
+    data->view = LISTEN_VIEW_LIST;
     data->sig_mtx = xSemaphoreCreateMutex();
     data->self = screen;
 
