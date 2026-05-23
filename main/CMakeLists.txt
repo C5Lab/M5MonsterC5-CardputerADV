@@ -1,4 +1,4 @@
-set(BOARD_SRCS "subghz_parser.c" "")
+set(BOARD_SRCS "subghz_rf_settings.c" "subghz_parser.c" "")
 if(NOT DEFINED BOARD OR BOARD STREQUAL "" OR BOARD STREQUAL ".")
     set(BOARD "adv")
 endif()
@@ -24,6 +24,7 @@ idf_component_register(
         "settings.c"
         "screen_manager.c"
         "subghz_parser.c"
+        "subghz_rf_settings.c"
         "drivers/display.c"
         "drivers/screenshot.c"
         "drivers/battery.c"
@@ -101,6 +102,10 @@ idf_component_register(
         "screens/subghz_scanner_screen.c"
         "screens/subghz_manage_screen.c"
         "screens/subghz_weather_screen.c"
+        "screens/subghz_settings_screen.c"
+        "screens/subghz_listen_settings_screen.c"
+        "screens/subghz_hunter_settings_screen.c"
+        "screens/subghz_scanner_settings_screen.c"
     INCLUDE_DIRS 
         "."
         "drivers"

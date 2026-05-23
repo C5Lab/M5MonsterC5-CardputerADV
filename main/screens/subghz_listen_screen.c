@@ -27,7 +27,9 @@
 
 #include "subghz_listen_screen.h"
 #include "subghz_freq_picker_screen.h"
+#include "subghz_listen_settings_screen.h"
 #include "subghz_parser.h"
+#include "subghz_rf_settings.h"
 #include "uart_handler.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -96,6 +98,9 @@ typedef struct {
     int  action_choice;         /* 0=Save, 1=TX, 2=Cancel */
     int  confirm_choice;        /* 0=Cancel, 1=Leave anyway */
     bool was_running_pre_menu;
+
+    /* Pushed Listen Settings? Restart RX on the next on_resume if so. */
+    bool restart_on_resume;
 
     char toast_text[TOAST_BUF_LEN];
     bool toast_visible;
@@ -350,7 +355,7 @@ static void draw_list_view(screen_t *self)
     redraw_status_row(data);
     redraw_list_window(data);
 
-    ui_draw_status("ENT:Act SP:Run F:Frq R:Raw");
+    ui_draw_status("ENT:Act SP:Run F:Frq S:Set");
 
     /* On full draw all dirty flags are cleared. */
     data->status_dirty = false;
@@ -515,17 +520,26 @@ static void start_rx(screen_t *self)
 
     uart_send_command("subghz_stop");
 
-    char cmd[32];
+    char cmd[48];
     snprintf(cmd, sizeof(cmd), "subghz_freq %.2f", data->freq_mhz);
     uart_send_command(cmd);
 
     data->running = true;
     uart_register_line_callback(uart_line_cb, data);
 
-    if (data->raw_mode) uart_send_command("subghz_rx raw");
-    else                uart_send_command("subghz_rx");
+    /* Apply user-configured RSSI noise gate so weak / strict captures match
+     * what's set in Listen Settings (same payload as coreS3). */
+    subghz_rf_settings_t cfg;
+    subghz_rf_settings_load(&cfg);
+    if (data->raw_mode) {
+        snprintf(cmd, sizeof(cmd), "subghz_rx raw rssi=%d", (int)cfg.listen_rssi_dbm);
+    } else {
+        snprintf(cmd, sizeof(cmd), "subghz_rx rssi=%d", (int)cfg.listen_rssi_dbm);
+    }
+    uart_send_command(cmd);
 
-    ESP_LOGI(TAG, "Listen started (%.2f MHz, raw=%d)", data->freq_mhz, data->raw_mode);
+    ESP_LOGI(TAG, "Listen started (%.2f MHz, raw=%d, rssi=%d)",
+             data->freq_mhz, data->raw_mode, (int)cfg.listen_rssi_dbm);
     if (data->view == LISTEN_VIEW_LIST) {
         redraw_status_row(data);
         if (data->sig_count == 0) redraw_empty_hint(data);
@@ -655,6 +669,15 @@ static void on_key_list(screen_t *self, key_code_t key)
                 data->raw_mode = !data->raw_mode;
                 redraw_status_row(data);
             }
+            break;
+
+        case KEY_S:
+            /* Open Listen Settings. Stop RX first so the UART line callback
+             * is freed; the settings screen does its own UART work and the
+             * Hunter/Listen restart pattern in coreS3 is "restart on back". */
+            data->restart_on_resume = data->running;
+            if (data->running) stop_rx(self);
+            screen_manager_push(subghz_listen_settings_screen_create, NULL);
             break;
 
         case KEY_UP:
@@ -840,7 +863,14 @@ static void on_destroy(screen_t *self)
 
 static void on_resume(screen_t *self)
 {
+    subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
     draw_screen(self);
+    /* Auto-restart RX if we stopped it to push Listen Settings (coreS3
+     * pattern). Always clear the flag so subsequent resumes don't restart. */
+    if (data && data->restart_on_resume) {
+        data->restart_on_resume = false;
+        if (!data->running) start_rx(self);
+    }
 }
 
 screen_t* subghz_listen_screen_create(void *params)

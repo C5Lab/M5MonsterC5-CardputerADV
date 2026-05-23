@@ -19,7 +19,9 @@
  */
 
 #include "subghz_hunter_screen.h"
+#include "subghz_hunter_settings_screen.h"
 #include "subghz_parser.h"
+#include "subghz_rf_settings.h"
 #include "uart_handler.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -99,6 +101,9 @@ typedef struct {
     int  action_choice;     /* 0=Save, 1=TX, 2=Cancel */
     int  confirm_choice;    /* 0=Cancel, 1=Leave anyway */
     bool was_running_pre_menu;
+
+    /* Pushed Hunter Settings? Restart analyzer on the next on_resume. */
+    bool restart_on_resume;
 
     char toast_text[STATUS_BUF_LEN];
     bool toast_visible;
@@ -405,7 +410,7 @@ static void draw_list_view(screen_t *self)
     redraw_status_row(data);
     redraw_list_window(data);
 
-    ui_draw_status("ENT:Act SP:Run ESC:Back");
+    ui_draw_status("ENT:Act SP:Run S:Set");
 
     data->status_dirty = false;
     data->window_dirty = false;
@@ -565,7 +570,17 @@ static void start_hunting(screen_t *self)
     uart_send_command("subghz_stop");
     data->running = true;
     uart_register_line_callback(uart_line_cb, data);
-    uart_send_command("subghz_freq_analyzer hunt");
+
+    /* Build the analyzer command from Hunter Settings (trigger / mode /
+     * single / fast / timeout) so the JanOS CLI surface matches coreS3. */
+    subghz_rf_settings_t cfg;
+    subghz_rf_settings_load(&cfg);
+    char cmd[80];
+    subghz_rf_build_hunter_cmd(&cfg, cmd, sizeof(cmd));
+    if (cmd[0] == '\0') {
+        snprintf(cmd, sizeof(cmd), "subghz_freq_analyzer hunt");
+    }
+    uart_send_command(cmd);
     set_status(data, HUNTER_STATUS_SCAN, "Hunting...");
     if (data->view == HUNTER_VIEW_LIST) {
         redraw_status_row(data);
@@ -663,6 +678,13 @@ static void on_key_list(screen_t *self, key_code_t key)
             clear_toast(data);
             if (data->running) stop_hunting(self);
             else               start_hunting(self);
+            break;
+
+        case KEY_S:
+            /* Open Hunter Settings; coreS3 resumes the analyzer on back. */
+            data->restart_on_resume = data->running;
+            if (data->running) stop_hunting(self);
+            screen_manager_push(subghz_hunter_settings_screen_create, NULL);
             break;
 
         case KEY_UP:
@@ -846,7 +868,12 @@ static void on_destroy(screen_t *self)
 
 static void on_resume(screen_t *self)
 {
+    subghz_hunter_data_t *data = (subghz_hunter_data_t *)self->user_data;
     draw_screen(self);
+    if (data && data->restart_on_resume) {
+        data->restart_on_resume = false;
+        if (!data->running) start_hunting(self);
+    }
 }
 
 screen_t* subghz_hunter_screen_create(void *params)

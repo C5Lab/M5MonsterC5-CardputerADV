@@ -21,6 +21,8 @@
 
 #include "subghz_scanner_screen.h"
 #include "subghz_listen_screen.h"
+#include "subghz_scanner_settings_screen.h"
+#include "subghz_rf_settings.h"
 #include "uart_handler.h"
 #include "text_ui.h"
 #include "esp_log.h"
@@ -72,6 +74,28 @@ static void redraw_freq_row(subghz_scanner_data_t *data, int idx);
 static void redraw_list_window(subghz_scanner_data_t *data);
 static void redraw_status_row(subghz_scanner_data_t *data);
 static void redraw_empty_hint(subghz_scanner_data_t *data);
+static void uart_line_cb(const char *line, void *user_data);
+
+/* Build the scanner CLI command from NVS-persisted settings and start it.
+ * Shared by screen creation and on_resume — both paths must pick up the
+ * latest Scanner Settings (dwell / edges / rssi / fast). */
+static void start_scanning(subghz_scanner_data_t *data)
+{
+    if (!data || data->running) return;
+
+    subghz_rf_settings_t cfg;
+    subghz_rf_settings_load(&cfg);
+    char cmd[80];
+    subghz_rf_build_scanner_cmd(&cfg, cmd, sizeof(cmd));
+    if (cmd[0] == '\0') {
+        snprintf(cmd, sizeof(cmd), "subghz_scanner");
+    }
+
+    uart_send_command("subghz_stop");
+    data->running = true;
+    uart_register_line_callback(uart_line_cb, data);
+    uart_send_command(cmd);
+}
 
 static void mark_row_dirty(subghz_scanner_data_t *d, int idx)
 {
@@ -278,7 +302,7 @@ static void draw_screen(screen_t *self)
     redraw_status_row(data);
     redraw_list_window(data);
 
-    ui_draw_status("ENT:Listen UP/DN ESC:Back");
+    ui_draw_status("ENT:Listen UP/DN S:Set");
 
     data->status_dirty = false;
     data->window_dirty = false;
@@ -384,6 +408,17 @@ static void on_key(screen_t *self, key_code_t key)
             on_pick_freq(self);
             break;
 
+        case KEY_S:
+            /* Open Scanner Settings; on_resume restarts the scanner with
+             * the freshly saved cfg via start_scanning(). */
+            if (data->running) {
+                uart_send_command("subghz_stop");
+                uart_clear_line_callback();
+                data->running = false;
+            }
+            screen_manager_push(subghz_scanner_settings_screen_create, NULL);
+            break;
+
         case KEY_ESC:
         case KEY_Q:
         case KEY_BACKSPACE:
@@ -422,12 +457,11 @@ static void on_destroy(screen_t *self)
 static void on_resume(screen_t *self)
 {
     subghz_scanner_data_t *data = (subghz_scanner_data_t *)self->user_data;
-    /* Restart scanner if user came back from a child screen (e.g. Listen) */
+    /* Restart scanner if user came back from a child screen (Listen,
+     * Scanner Settings). start_scanning() picks up any freshly-saved
+     * settings from NVS. */
     if (!data->running) {
-        uart_send_command("subghz_stop");
-        data->running = true;
-        uart_register_line_callback(uart_line_cb, data);
-        uart_send_command("subghz_scanner");
+        start_scanning(data);
     }
     draw_screen(self);
 }
@@ -461,11 +495,8 @@ screen_t* subghz_scanner_screen_create(void *params)
 
     draw_screen(screen);
 
-    /* Auto-start scanner */
-    uart_send_command("subghz_stop");
-    data->running = true;
-    uart_register_line_callback(uart_line_cb, data);
-    uart_send_command("subghz_scanner");
+    /* Auto-start scanner using NVS-persisted Scanner Settings. */
+    start_scanning(data);
 
     ESP_LOGI(TAG, "Scanner screen created");
     return screen;

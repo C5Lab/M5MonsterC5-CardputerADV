@@ -11,6 +11,7 @@
 #include "subghz_weather_screen.h"
 #include "subghz_jammer_screen.h"
 #include "subghz_tesla_screen.h"
+#include "subghz_settings_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
 #include <string.h>
@@ -31,6 +32,7 @@ static const subghz_menu_entry_t s_entries[] = {
     {"Weather",    subghz_weather_screen_create},
     {"Jammer",     subghz_jammer_screen_create},
     {"Tesla",      subghz_tesla_screen_create},
+    {"Settings",   subghz_settings_screen_create},
 };
 
 #define MENU_COUNT     ((int)(sizeof(s_entries) / sizeof(s_entries[0])))
