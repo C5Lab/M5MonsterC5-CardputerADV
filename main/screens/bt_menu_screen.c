@@ -7,6 +7,7 @@
 #include "airtag_scan_screen.h"
 #include "bt_scan_screen.h"
 #include "bt_locator_screen.h"
+#include "bt_jammer_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
 #include <string.h>
@@ -19,6 +20,7 @@ static const char *menu_items[] = {
     "AirTag scan",
     "BT scan",
     "BT Locator",
+    "Jammer",
 };
 
 #define MENU_ITEM_COUNT (sizeof(menu_items) / sizeof(menu_items[0]))
@@ -94,6 +96,9 @@ static void on_key(screen_t *self, key_code_t key)
                         break;
                     case 2:  // BT Locator
                         screen_manager_push(bt_locator_screen_create, NULL);
+                        break;
+                    case 3:  // Jammer
+                        screen_manager_push(bt_jammer_screen_create, NULL);
                         break;
                 }
             }
