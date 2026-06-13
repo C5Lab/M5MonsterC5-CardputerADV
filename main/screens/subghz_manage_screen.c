@@ -60,6 +60,7 @@ typedef enum {
     SD_ACTION_RENAME = 0,
     SD_ACTION_DELETE,
     SD_ACTION_TRANSMIT,
+    SD_ACTION_MULTI_TX,
     SD_ACTION_CANCEL,
     SD_ACTION_COUNT,
 } sd_action_t;
@@ -76,6 +77,11 @@ typedef struct {
 
     bool collecting_list;
     bool clearing_all;
+
+    bool multi_tx_active;
+    int  multi_tx_remaining;
+    int  multi_tx_total;
+    int  multi_tx_idx;
 
     char status_text[STATUS_BUF_LEN];
     uint16_t status_color;
@@ -182,6 +188,29 @@ static void uart_line_cb(const char *line, void *user_data)
                 request_list_refresh(data);
             }
             return;
+        }
+        return;
+    }
+
+    if (data->multi_tx_active) {
+        if (strstr(line, "[SUBGHZ_TX]")) {
+            if (data->multi_tx_remaining > 0) {
+                char cmd[32];
+                snprintf(cmd, sizeof(cmd), "subghz_tx %d sd", data->multi_tx_idx);
+                uart_send_command(cmd);
+                data->multi_tx_remaining--;
+                char status[STATUS_BUF_LEN];
+                snprintf(status, sizeof(status), "TX %d/%d",
+                         data->multi_tx_total - data->multi_tx_remaining,
+                         data->multi_tx_total);
+                set_status(data, status, UI_COLOR_HIGHLIGHT);
+            } else {
+                data->multi_tx_active = false;
+                char status[STATUS_BUF_LEN];
+                snprintf(status, sizeof(status), "Sent %dx #%d",
+                         data->multi_tx_total, data->multi_tx_idx);
+                set_status(data, status, UI_COLOR_HIGHLIGHT);
+            }
         }
         return;
     }
@@ -361,8 +390,8 @@ static void draw_list_view(screen_t *self)
     clear_row_dirty(data);
 }
 
-/* Action menu rows 3..6 = Rename / Delete / Transmit / Cancel. */
-#define SD_ACTION_ROW_BASE 3
+/* Action menu rows 2..6 = Rename / Delete / Transmit / Multi Transmit / Cancel. */
+#define SD_ACTION_ROW_BASE 2
 
 static const char *sd_action_label(int idx)
 {
@@ -370,6 +399,7 @@ static const char *sd_action_label(int idx)
         case SD_ACTION_RENAME:   return "Rename";
         case SD_ACTION_DELETE:   return "Delete";
         case SD_ACTION_TRANSMIT: return "Transmit";
+        case SD_ACTION_MULTI_TX: return "Multi Transmit";
         case SD_ACTION_CANCEL:   return "Cancel";
         default:                 return "";
     }
@@ -403,7 +433,7 @@ static void draw_actions_view(screen_t *self)
             snprintf(l1, sizeof(l1), "#%d %.10s %d.%02d",
                      sig->idx, sig->type, whole, frac);
         }
-        ui_print_center(2, l1, UI_COLOR_HIGHLIGHT);
+        ui_print_center(1, l1, UI_COLOR_HIGHLIGHT);
     }
 
     for (int i = 0; i < SD_ACTION_COUNT; i++) redraw_action_row(data, i);
@@ -624,6 +654,68 @@ static void enter_rename(screen_t *self)
     screen_manager_push(text_input_screen_create, p);
 }
 
+static void on_multi_tx_submit(const char *text, void *user_data)
+{
+    (void)user_data;
+    if (!s_current) {
+        screen_manager_pop();
+        return;
+    }
+    subghz_sd_data_t *data = s_current;
+
+    if (data->selected_index >= data->sig_count) {
+        screen_manager_pop();
+        return;
+    }
+
+    char *end = NULL;
+    long count = (text && text[0]) ? strtol(text, &end, 10) : 0;
+    if (!text || !end || *end != '\0' || count <= 0) {
+        set_status(data, "Bad count", RGB565(255, 80, 80));
+        data->view = SD_VIEW_LIST;
+        screen_manager_pop();
+        return;
+    }
+    if (count > 999) count = 999;
+
+    data->multi_tx_idx = data->sigs[data->selected_index].idx;
+    data->multi_tx_total = (int)count;
+    data->multi_tx_remaining = (int)count;
+    data->multi_tx_active = true;
+
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "subghz_tx %d sd", data->multi_tx_idx);
+    uart_send_command(cmd);
+    ESP_LOGI(TAG, "Sent: %s", cmd);
+    data->multi_tx_remaining--;
+
+    char status[STATUS_BUF_LEN];
+    snprintf(status, sizeof(status), "TX %d/%d",
+             data->multi_tx_total - data->multi_tx_remaining,
+             data->multi_tx_total);
+    set_status(data, status, UI_COLOR_HIGHLIGHT);
+
+    data->view = SD_VIEW_LIST;
+    screen_manager_pop();
+}
+
+static void enter_multi_tx(screen_t *self)
+{
+    subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
+    if (data->selected_index >= data->sig_count) return;
+
+    text_input_params_t *p = calloc(1, sizeof(text_input_params_t));
+    if (!p) return;
+    p->title = "Multi Transmit";
+    p->hint = "How many times?";
+    p->on_submit = on_multi_tx_submit;
+    p->user_data = NULL;
+    p->allow_empty = false;
+
+    data->view = SD_VIEW_LIST;
+    screen_manager_push(text_input_screen_create, p);
+}
+
 static void on_key_list(screen_t *self, key_code_t key)
 {
     subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
@@ -728,6 +820,9 @@ static void on_key_actions(screen_t *self, key_code_t key)
                 case SD_ACTION_TRANSMIT:
                     perform_transmit(self);
                     break;
+                case SD_ACTION_MULTI_TX:
+                    enter_multi_tx(self);
+                    break;
                 case SD_ACTION_CANCEL:
                 default:
                     data->view = SD_VIEW_LIST;
@@ -822,6 +917,15 @@ static void on_destroy(screen_t *self)
 static void on_resume(screen_t *self)
 {
     subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
+
+    /* A multi-transmit is in flight (driven by [SUBGHZ_TX] responses); don't
+     * refresh the list out from under it - just re-own the UART and redraw. */
+    if (data->multi_tx_active) {
+        uart_register_line_callback(uart_line_cb, data);
+        draw_screen(self);
+        return;
+    }
+
     /* Coming back from text-input rename or any child screen - refresh. */
     if (data->view != SD_VIEW_LOADING) {
         data->view = SD_VIEW_LOADING;
