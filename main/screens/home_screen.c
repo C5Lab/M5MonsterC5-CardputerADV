@@ -12,6 +12,7 @@
 #include "compromised_menu_screen.h"
 #include "network_attacks_screen.h"
 #include "subghz_menu_screen.h"
+#include "mesh_recon_screen.h"
 #include "wardrive_menu_screen.h"
 #include "settings_screen.h"
 #include "placeholder_screen.h"
@@ -42,6 +43,7 @@ static const menu_item_t all_menu_items[] = {
     {"Compromised data", "Compromised data", compromised_menu_screen_create, NULL, false},
     {"Deauth Detector", "Deauth Detector", deauth_detector_screen_create, NULL, false},
     {"Global WiFi Attacks", "Global WiFi Tests", global_attacks_screen_create, NULL, false},
+    {"Mesh Recon", "Mesh Recon", mesh_recon_screen_create, NULL, false},
     {"Network Tools", "Network Tools", network_attacks_screen_create, NULL, false},
     {"Sub-GHz", "Sub-GHz", subghz_menu_screen_create, NULL, true},
     {"Wardrive", "Wardrive", wardrive_menu_screen_create, NULL, false},
@@ -117,6 +119,29 @@ static void draw_screen(screen_t *self)
     ui_draw_status("UP/DOWN:Navigate ENTER:Select");
 }
 
+// Redraw only the content rows + scroll arrows (title/status stay put).
+// Used on page scroll so the whole screen doesn't flash.
+static void redraw_content(home_screen_data_t *data)
+{
+    int visible_end = data->scroll_offset + VISIBLE_ITEMS;
+    if (visible_end > data->visible_count) visible_end = data->visible_count;
+    for (int r = 0; r < VISIBLE_ITEMS; r++) {
+        int i = data->scroll_offset + r;
+        int row = r + 1;
+        if (i < visible_end) {
+            ui_draw_menu_item(row, get_visible_title(data, i), i == data->selected_index, false, false);
+        } else {
+            display_fill_rect(0, row * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+        }
+    }
+    if (data->scroll_offset > 0) {
+        ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
+    }
+    if (data->scroll_offset + VISIBLE_ITEMS < data->visible_count) {
+        ui_print(UI_COLS - 2, VISIBLE_ITEMS, "v", UI_COLOR_DIMMED);
+    }
+}
+
 // Optimized: redraw only two changed rows
 static void redraw_two_items(home_screen_data_t *data, int old_index, int new_index)
 {
@@ -146,7 +171,7 @@ static void on_key(screen_t *self, key_code_t key)
                     if (data->selected_index >= data->visible_count) {
                         data->selected_index = data->visible_count - 1;
                     }
-                    draw_screen(self);
+                    redraw_content(data);
                 } else {
                     data->selected_index--;
                     redraw_two_items(data, old_index, data->selected_index);
@@ -154,7 +179,7 @@ static void on_key(screen_t *self, key_code_t key)
             } else if (data->visible_count > 0) {
                 data->selected_index = data->visible_count - 1;
                 data->scroll_offset = (data->selected_index / VISIBLE_ITEMS) * VISIBLE_ITEMS;
-                draw_screen(self);
+                redraw_content(data);
             }
             break;
 

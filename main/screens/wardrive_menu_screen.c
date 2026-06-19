@@ -1,34 +1,91 @@
 /**
  * @file wardrive_menu_screen.c
- * @brief Wardrive sub-menu
+ * @brief Wardrive sub-menu (scrollable; content-only redraw on nav).
  */
 
 #include "wardrive_menu_screen.h"
 #include "wardrive_screen.h"
 #include "wardrive_upload_screen.h"
+#include "wardrive_config_screen.h"
+#include "wardrive_blacklist_screen.h"
+#include "antisurv_screen.h"
 #include "text_ui.h"
 #include <stdlib.h>
 #include <stdio.h>
 
+// Menu item indices
+#define MI_START     0
+#define MI_ANTISURV  1
+#define MI_SETUP     2
+#define MI_BLACKLIST 3
+#define MI_WDGWARS   4
+#define MI_WIGLE     5
+#define MI_TRACE     6
+#define MI_COUNT     7
+
+#define VISIBLE_ITEMS 6
+
 typedef struct {
     int selected;
+    int scroll_offset;
     bool trace_enabled;
 } wardrive_menu_data_t;
+
+// Build the label for one item (trace is dynamic).
+static void item_label(wardrive_menu_data_t *data, int idx, char *buf, size_t len)
+{
+    switch (idx) {
+        case MI_START:     snprintf(buf, len, "Start Wardrive"); break;
+        case MI_ANTISURV:  snprintf(buf, len, "Anti-Surveillance"); break;
+        case MI_SETUP:     snprintf(buf, len, "Setup"); break;
+        case MI_BLACKLIST: snprintf(buf, len, "Blacklist"); break;
+        case MI_WDGWARS:   snprintf(buf, len, "Upload to Wdgwars"); break;
+        case MI_WIGLE:     snprintf(buf, len, "Upload to Wigle"); break;
+        case MI_TRACE:     snprintf(buf, len, "Trace: %s", data->trace_enabled ? "Yes" : "No"); break;
+        default:           buf[0] = '\0'; break;
+    }
+}
+
+// Draw the visible menu items + scroll arrows (no clear/title/status).
+static void redraw_items(wardrive_menu_data_t *data)
+{
+    for (int r = 0; r < VISIBLE_ITEMS; r++) {
+        int idx = data->scroll_offset + r;
+        int row = r + 1;
+        if (idx < MI_COUNT) {
+            char label[24];
+            item_label(data, idx, label, sizeof(label));
+            ui_draw_menu_item(row, label, idx == data->selected, false, false);
+        } else {
+            display_fill_rect(0, row * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+        }
+    }
+    if (data->scroll_offset > 0) {
+        ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
+    }
+    if (data->scroll_offset + VISIBLE_ITEMS < MI_COUNT) {
+        ui_print(UI_COLS - 2, VISIBLE_ITEMS, "v", UI_COLOR_DIMMED);
+    }
+}
 
 static void draw_screen(screen_t *self)
 {
     wardrive_menu_data_t *data = (wardrive_menu_data_t *)self->user_data;
     ui_clear();
     ui_draw_title("Wardrive");
-
-    char trace[24];
-    snprintf(trace, sizeof(trace), "Trace: %s", data->trace_enabled ? "Yes" : "No");
-
-    ui_draw_menu_item(1, "Start Wardrive", data->selected == 0, false, false);
-    ui_draw_menu_item(2, "Upload to Wdgwars", data->selected == 1, false, false);
-    ui_draw_menu_item(3, "Upload to Wigle", data->selected == 2, false, false);
-    ui_draw_menu_item(4, trace, data->selected == 3, false, false);
+    redraw_items(data);
     ui_draw_status("UP/DOWN OK BACK RIGHT");
+}
+
+static void move_selection(wardrive_menu_data_t *data, int dir)
+{
+    int s = data->selected + dir;
+    if (s < 0) s = MI_COUNT - 1;
+    if (s >= MI_COUNT) s = 0;
+    data->selected = s;
+    if (data->selected < data->scroll_offset) data->scroll_offset = data->selected;
+    if (data->selected >= data->scroll_offset + VISIBLE_ITEMS)
+        data->scroll_offset = data->selected - VISIBLE_ITEMS + 1;
 }
 
 static void start_wardrive_run(wardrive_menu_data_t *data)
@@ -54,30 +111,33 @@ static void on_key(screen_t *self, key_code_t key)
 
     switch (key) {
         case KEY_UP:
-            data->selected = (data->selected > 0) ? data->selected - 1 : 3;
-            draw_screen(self);
+            move_selection(data, -1);
+            redraw_items(data);
             break;
         case KEY_DOWN:
-            data->selected = (data->selected < 3) ? data->selected + 1 : 0;
-            draw_screen(self);
+            move_selection(data, +1);
+            redraw_items(data);
             break;
         case KEY_RIGHT:
-            if (data->selected == 3) {
+            if (data->selected == MI_TRACE) {
                 data->trace_enabled = !data->trace_enabled;
-                draw_screen(self);
+                redraw_items(data);
             }
             break;
         case KEY_ENTER:
         case KEY_SPACE:
-            if (data->selected == 0) {
-                start_wardrive_run(data);
-            } else if (data->selected == 1) {
-                start_upload(WARDRIVE_UPLOAD_TARGET_WDGWARS);
-            } else if (data->selected == 2) {
-                start_upload(WARDRIVE_UPLOAD_TARGET_WIGLE);
-            } else if (data->selected == 3) {
-                data->trace_enabled = !data->trace_enabled;
-                draw_screen(self);
+            switch (data->selected) {
+                case MI_START:     start_wardrive_run(data); break;
+                case MI_ANTISURV:  screen_manager_push(antisurv_screen_create, NULL); break;
+                case MI_SETUP:     screen_manager_push(wardrive_config_screen_create, NULL); break;
+                case MI_BLACKLIST: screen_manager_push(wardrive_blacklist_screen_create, NULL); break;
+                case MI_WDGWARS:   start_upload(WARDRIVE_UPLOAD_TARGET_WDGWARS); break;
+                case MI_WIGLE:     start_upload(WARDRIVE_UPLOAD_TARGET_WIGLE); break;
+                case MI_TRACE:
+                    data->trace_enabled = !data->trace_enabled;
+                    redraw_items(data);
+                    break;
+                default: break;
             }
             break;
         case KEY_ESC:
@@ -112,6 +172,7 @@ screen_t* wardrive_menu_screen_create(void *params)
         return NULL;
     }
     data->selected = 0;
+    data->scroll_offset = 0;
     data->trace_enabled = true;
 
     screen->user_data = data;

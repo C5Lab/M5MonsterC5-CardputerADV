@@ -46,6 +46,51 @@ typedef struct {
 // Forward declaration
 static void draw_screen(screen_t *self);
 
+static void draw_title(handshakes_data_t *data)
+{
+    char title[32];
+    snprintf(title, sizeof(title), "Handshakes (%d)", data->entry_count);
+    ui_draw_title(title);
+}
+
+static void draw_entry_row(handshakes_data_t *data, int entry_idx)
+{
+    int row = entry_idx - data->scroll_offset + 1;
+    if (row < 1 || row > VISIBLE_ITEMS || entry_idx >= data->entry_count) return;
+
+    char label[32];
+    snprintf(label, sizeof(label), "%.28s", data->names[entry_idx]);
+    ui_draw_menu_item(row, label, entry_idx == data->selected_index, false, false);
+}
+
+static void draw_content(handshakes_data_t *data)
+{
+    for (int i = 0; i < VISIBLE_ITEMS; i++) {
+        display_fill_rect(0, (i + 1) * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+    }
+
+    if (data->loading) {
+        ui_print_center(3, "Loading...", UI_COLOR_DIMMED);
+    } else if (data->entry_count == 0) {
+        ui_print_center(3,
+                        data->status_message[0] ? data->status_message : "No handshakes found",
+                        UI_COLOR_DIMMED);
+    } else {
+        for (int i = 0; i < VISIBLE_ITEMS; i++) {
+            int entry_idx = data->scroll_offset + i;
+            if (entry_idx < data->entry_count) {
+                draw_entry_row(data, entry_idx);
+            }
+        }
+        if (data->scroll_offset > 0) {
+            ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
+        }
+        if (data->scroll_offset + VISIBLE_ITEMS < data->entry_count) {
+            ui_print(UI_COLS - 2, VISIBLE_ITEMS, "v", UI_COLOR_DIMMED);
+        }
+    }
+}
+
 /**
  * @brief Check if line is an ESP log line or command echo
  */
@@ -200,47 +245,8 @@ static void draw_screen(screen_t *self)
     handshakes_data_t *data = (handshakes_data_t *)self->user_data;
     
     ui_clear();
-    
-    // Draw title
-    char title[32];
-    snprintf(title, sizeof(title), "Handshakes (%d)", data->entry_count);
-    ui_draw_title(title);
-    
-    if (data->loading) {
-        ui_print_center(3, "Loading...", UI_COLOR_DIMMED);
-    } else if (data->entry_count == 0) {
-        if (data->status_message[0] != '\0') {
-            ui_print_center(3, data->status_message, UI_COLOR_DIMMED);
-        } else {
-            ui_print_center(3, "No handshakes found", UI_COLOR_DIMMED);
-        }
-    } else {
-        // Draw visible entries
-        int start_row = 1;
-        
-        for (int i = 0; i < VISIBLE_ITEMS; i++) {
-            int entry_idx = data->scroll_offset + i;
-            
-            if (entry_idx < data->entry_count) {
-                // Truncate long names for display
-                char label[32];
-                snprintf(label, sizeof(label), "%.28s", data->names[entry_idx]);
-                
-                bool selected = (entry_idx == data->selected_index);
-                ui_draw_menu_item(start_row + i, label, selected, false, false);
-            }
-        }
-        
-        // Scroll indicators
-        if (data->scroll_offset > 0) {
-            ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
-        }
-        if (data->scroll_offset + VISIBLE_ITEMS < data->entry_count) {
-            ui_print(UI_COLS - 2, VISIBLE_ITEMS, "v", UI_COLOR_DIMMED);
-        }
-    }
-    
-    // Draw status bar
+    draw_title(data);
+    draw_content(data);
     ui_draw_status("UP/DOWN:Scroll ESC:Back");
 }
 
@@ -266,7 +272,8 @@ static void on_tick(screen_t *self)
     
     if (data->needs_redraw) {
         data->needs_redraw = false;
-        draw_screen(self);
+        draw_title(data);
+        draw_content(data);
     }
 }
 
@@ -286,25 +293,16 @@ static void on_key(screen_t *self, key_code_t key)
                     if (data->selected_index >= data->entry_count) {
                         data->selected_index = data->entry_count - 1;
                     }
-                    draw_screen(self);  // Full redraw on page jump
+                    draw_content(data);
                 } else {
                     data->selected_index--;
-                    // Redraw only 2 rows
-                    int start_row = 1;
-                    for (int idx = old_idx; idx >= data->selected_index; idx--) {
-                        int i = idx - data->scroll_offset;
-                        if (i >= 0 && i < VISIBLE_ITEMS && idx < data->entry_count) {
-                            char label[32];
-                            snprintf(label, sizeof(label), "%.28s", data->names[idx]);
-                            bool selected = (idx == data->selected_index);
-                            ui_draw_menu_item(start_row + i, label, selected, false, false);
-                        }
-                    }
+                    draw_entry_row(data, old_idx);
+                    draw_entry_row(data, data->selected_index);
                 }
             } else if (data->entry_count > 0) {
                 data->selected_index = data->entry_count - 1;
                 data->scroll_offset = (data->selected_index / VISIBLE_ITEMS) * VISIBLE_ITEMS;
-                draw_screen(self);
+                draw_content(data);
             }
             break;
             
@@ -316,25 +314,16 @@ static void on_key(screen_t *self, key_code_t key)
                     // Jump to next page - don't adjust back for partial pages
                     data->scroll_offset += VISIBLE_ITEMS;
                     data->selected_index = data->scroll_offset;
-                    draw_screen(self);  // Full redraw on page jump
+                    draw_content(data);
                 } else {
                     data->selected_index++;
-                    // Redraw only 2 rows
-                    int start_row = 1;
-                    for (int idx = old_idx; idx <= data->selected_index; idx++) {
-                        int i = idx - data->scroll_offset;
-                        if (i >= 0 && i < VISIBLE_ITEMS && idx < data->entry_count) {
-                            char label[32];
-                            snprintf(label, sizeof(label), "%.28s", data->names[idx]);
-                            bool selected = (idx == data->selected_index);
-                            ui_draw_menu_item(start_row + i, label, selected, false, false);
-                        }
-                    }
+                    draw_entry_row(data, old_idx);
+                    draw_entry_row(data, data->selected_index);
                 }
             } else if (data->entry_count > 0) {
                 data->selected_index = 0;
                 data->scroll_offset = 0;
-                draw_screen(self);
+                draw_content(data);
             }
             break;
             

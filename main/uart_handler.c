@@ -44,6 +44,7 @@ static SemaphoreHandle_t uart_mutex = NULL;
 // WiFi client connection state
 static bool wifi_connected = false;
 static bool wardrive_active = false;
+static bool antisurv_active = false;
 
 // Board ping detection state
 static volatile bool pong_received = false;
@@ -415,6 +416,16 @@ bool uart_is_wardrive_active(void)
 void uart_set_wardrive_active(bool active)
 {
     wardrive_active = active;
+}
+
+bool uart_is_antisurv_active(void)
+{
+    return antisurv_active;
+}
+
+void uart_set_antisurv_active(bool active)
+{
+    antisurv_active = active;
 }
 
 /**

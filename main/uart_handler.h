@@ -134,6 +134,18 @@ bool uart_is_wardrive_active(void);
 void uart_set_wardrive_active(bool active);
 
 /**
+ * @brief Get anti-surveillance activity flag
+ * @return true when an anti-surveillance scan is running
+ */
+bool uart_is_antisurv_active(void);
+
+/**
+ * @brief Set anti-surveillance activity flag
+ * @param active true when an anti-surveillance scan is running
+ */
+void uart_set_antisurv_active(bool active);
+
+/**
  * @brief Probe for a Sub-GHz module on the connected JanOS device.
  *        Sends `subghz_status` and waits for a line that starts with
  *        `[SUBGHZ_STATUS]`. Caches the result for uart_is_subghz_available().
