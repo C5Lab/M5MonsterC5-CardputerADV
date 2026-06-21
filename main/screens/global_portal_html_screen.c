@@ -268,7 +268,7 @@ static void launch_portal(global_portal_html_data_t *data)
     
     // Send start_portal command with SSID
     char portal_cmd[64];
-    snprintf(portal_cmd, sizeof(portal_cmd), "start_portal %s", data->ssid);
+    snprintf(portal_cmd, sizeof(portal_cmd), "start_portal \"%s\"", data->ssid);
     uart_send_command(portal_cmd);
     buzzer_beep_attack();
     

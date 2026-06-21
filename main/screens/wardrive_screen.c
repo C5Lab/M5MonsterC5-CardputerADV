@@ -50,6 +50,8 @@ typedef struct {
     int wardrive_wifi_count;
     int wardrive_bt_count;
     int wardrive_sat_count;
+    int wardrive_relog_count;   // running re-log counter (D-UCB)
+    int wardrive_best_channel;  // best channel from the D-UCB optimizer (<=0 = unknown)
     int gps_wait_elapsed;
     float wardrive_distance_m;
 
@@ -65,6 +67,7 @@ typedef struct {
     bool start_pending;
     bool no_sd_overlay;
     bool no_sd_continue_yes;
+    bool antisurv_block;        // anti-surv is running -> block wardrive (shared radio)
     bool stop_confirm_overlay;
     bool stop_confirm_yes;
     int cap_tick_counter;
@@ -194,6 +197,38 @@ static bool parse_bt_devices(const char *line, int *bt_count)
     return false;
 }
 
+// Running re-log counter: the integer that immediately precedes "relogs",
+// e.g. "..., 20 relogs, D-UCB...". Read the digits directly (sscanf would
+// choke on the preceding comma).
+static bool parse_relogs(const char *line, int *relogs)
+{
+    const char *p = strstr(line, "relog");
+    if (!p) return false;
+    const char *e = p;
+    while (e > line && e[-1] == ' ') e--;       // skip spaces before "relogs"
+    const char *b = e;
+    while (b > line && isdigit((unsigned char)b[-1])) b--;
+    if (b == e) return false;                   // no number there
+    *relogs = atoi(b);
+    return true;
+}
+
+// Best channel from the D-UCB optimizer: the integer following the "best" token
+// (e.g. "D-UCB best ch: 6").
+static bool parse_best_channel(const char *line, int *ch)
+{
+    const char *p = strstr(line, "best");
+    if (!p) return false;
+    p += 4;
+    while (*p && !isdigit((unsigned char)*p)) p++;
+    int v = -1;
+    if (sscanf(p, "%d", &v) == 1 && v > 0) {
+        *ch = v;
+        return true;
+    }
+    return false;
+}
+
 static void parse_lat_lon_from_text(wardrive_data_t *data, const char *line)
 {
     if (!data || !line) return;
@@ -281,6 +316,14 @@ static void update_status_line(wardrive_data_t *data, const char *line)
     int bt = 0;
     if (parse_bt_devices(line, &bt)) {
         data->wardrive_bt_count = bt;
+    }
+    int relogs = 0;
+    if (parse_relogs(line, &relogs)) {
+        data->wardrive_relog_count = relogs;
+    }
+    int best_ch = 0;
+    if (parse_best_channel(line, &best_ch)) {
+        data->wardrive_best_channel = best_ch;
     }
 }
 
@@ -405,6 +448,13 @@ static void draw_screen(screen_t *self)
     // Clear content area only
     display_fill_rect(0, WD_CONTENT_Y_START, DISPLAY_WIDTH, WD_CONTENT_HEIGHT, UI_COLOR_BG);
 
+    if (data->antisurv_block) {
+        ui_print_center(2, "Stop Anti-Surv first", UI_COLOR_HIGHLIGHT);
+        ui_print_center(4, "Anti-Surv is running", UI_COLOR_DIMMED);
+        ui_draw_status("ESC:Back");
+        return;
+    }
+
     if (data->no_sd_overlay) {
         ui_print_center(2, "No SD card!", UI_COLOR_HIGHLIGHT);
         ui_print_center(3, "Logs won't be saved.", UI_COLOR_TEXT);
@@ -438,13 +488,20 @@ static void draw_screen(screen_t *self)
 
     char counter[40];
     float km = data->wardrive_distance_m / 1000.0f;
-    snprintf(counter, sizeof(counter), "WiFi:%d BT:%d SAT:%d %.2fkm",
-             data->wardrive_wifi_count, data->wardrive_bt_count, data->wardrive_sat_count, km);
+    snprintf(counter, sizeof(counter), "WiFi:%d BT:%d SAT:%d",
+             data->wardrive_wifi_count, data->wardrive_bt_count, data->wardrive_sat_count);
     ui_print(0, 2, counter, UI_COLOR_DIMMED);
 
-    char seen_line[40];
-    snprintf(seen_line, sizeof(seen_line), "Captured: %d entries", data->ring_count);
-    ui_print(0, 3, seen_line, UI_COLOR_TEXT);
+    char metrics[40];
+    char ch_str[12];
+    if (data->wardrive_best_channel > 0) {
+        snprintf(ch_str, sizeof(ch_str), "%d", data->wardrive_best_channel);
+    } else {
+        snprintf(ch_str, sizeof(ch_str), "-");
+    }
+    snprintf(metrics, sizeof(metrics), "relog:%d ch:%s %.2fkm",
+             data->wardrive_relog_count, ch_str, km);
+    ui_print(0, 3, metrics, UI_COLOR_TEXT);
 
     if (data->cur_lat[0] && data->cur_lon[0]) {
         char gps_line[40];
@@ -465,6 +522,13 @@ static void on_key(screen_t *self, key_code_t key)
 {
     wardrive_data_t *data = (wardrive_data_t *)self->user_data;
     if (!data) return;
+
+    if (data->antisurv_block) {
+        if (key == KEY_ESC || key == KEY_Q || key == KEY_BACKSPACE) {
+            screen_manager_pop();
+        }
+        return;
+    }
 
     if (data->no_sd_overlay) {
         if (key == KEY_LEFT || key == KEY_RIGHT) {
@@ -574,9 +638,10 @@ screen_t* wardrive_screen_create(void *params)
         data->trace_enabled = in->trace;
         free(in);
     }
-    data->no_sd_overlay = is_board_sd_missing();
+    data->antisurv_block = uart_is_antisurv_active();
+    data->no_sd_overlay = !data->antisurv_block && is_board_sd_missing();
     data->no_sd_continue_yes = false;
-    data->start_pending = !data->no_sd_overlay;
+    data->start_pending = !data->antisurv_block && !data->no_sd_overlay;
     snprintf(data->status_main, sizeof(data->status_main), "Starting...");
     snprintf(data->gps_overlay, sizeof(data->gps_overlay), "Waiting for GPS");
 

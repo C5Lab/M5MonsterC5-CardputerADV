@@ -27,7 +27,6 @@ on:
     paths:
       - 'main/version.h'
       - '.github/scripts/**'
-      - '.github/workflows/esp32s3-build-master.yml'
   release:
     types: [published, edited]
 
@@ -177,6 +176,9 @@ jobs:
     name: Release
     needs: [package]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: read
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     steps:
       - name: Resolve release tag
@@ -225,11 +227,68 @@ jobs:
             zip -9 "$out" "${files[@]}"
           done
 
+      - name: Build release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FW_VERSION: ${{ needs.package.outputs.fw_version }}
+          REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          notes_file="release_notes.md"
+          TAG="${RELEASE_TAG:-v${FW_VERSION}}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
+          PAGES_LINK="https://${REPO%/*}.github.io/${REPO#*/}/"
+
+          {
+            printf '%s\n\n' "Release ${TAG} published."
+            printf '%s\n' "Release page: ${RELEASE_PAGE}"
+            printf '%s\n' "Web flasher: ${PAGES_LINK}"
+            printf '%s\n' "ADV firmware (${FW_VERSION}): ${BASE_URL}/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.bin"
+            printf '%s\n' "ADV full image: ${BASE_URL}/M5MonsterC5-CardputerADV-adv-full-${FW_VERSION}.bin"
+            printf '%s\n' "ADV ZIP: ${BASE_URL}/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.zip"
+            printf '%s\n' "K132 firmware (${FW_VERSION}): ${BASE_URL}/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.bin"
+            printf '%s\n' "K132 full image: ${BASE_URL}/M5MonsterC5-CardputerADV-k132-full-${FW_VERSION}.bin"
+            printf '%s\n\n' "K132 ZIP: ${BASE_URL}/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.zip"
+          } > "$notes_file"
+
+          if [ "${GITHUB_EVENT_NAME:-}" = "release" ]; then
+            if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "${GITHUB_EVENT_PATH:-}" ]; then
+              release_body="$(jq -r '.release.body // ""' "$GITHUB_EVENT_PATH")"
+              if [ -n "$(printf '%s' "$release_body" | tr -d '\r\n[:space:]')" ]; then
+                printf '%s\n' "$release_body" >> "$notes_file"
+              fi
+            fi
+            exit 0
+          fi
+
+          api="/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls"
+          pr_json="$(gh api -H "Accept: application/vnd.github+json" "$api" 2>/dev/null || echo '[]')"
+          pr_title="$(printf '%s' "$pr_json" | jq -r '.[0].title // ""')"
+          pr_body="$(printf '%s' "$pr_json" | jq -r '.[0].body // ""')"
+          if [ -n "$(printf '%s' "$pr_body" | tr -d '\r\n[:space:]')" ]; then
+            if [ -n "$pr_title" ]; then
+              printf '%s\n\n' "$pr_title" >> "$notes_file"
+            fi
+            printf '%s\n' "$pr_body" >> "$notes_file"
+            exit 0
+          fi
+
+          gen_json="$(gh api -X POST -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" 2>/dev/null || echo '')"
+          gen_body="$(printf '%s' "$gen_json" | jq -r '.body // ""')"
+          if [ -n "$(printf '%s' "$gen_body" | tr -d '\r\n[:space:]')" ]; then
+            printf '%s\n' "$gen_body" >> "$notes_file"
+          fi
+
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ format('v{0} - M5MonsterC5 Cardputer (ADV + K132)', needs.package.outputs.fw_version) }}
+          body_path: release_notes.md
           overwrite_files: true
           files: |
             release_artifacts/firmware/flash_board.py
@@ -355,7 +414,7 @@ jobs:
   discord:
     name: Discord
     needs: [release, package, pages]
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'release'
+    if: ${{ always() && needs.release.result == 'success' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'release') }}
     runs-on: ubuntu-24.04
     steps:
       - name: Notify Discord
@@ -385,12 +444,10 @@ jobs:
           ZIP_K132="$BASE_URL/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.zip"
           RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
           PAGES_LINK="${PAGES_URL:-https://${GITHUB_REPOSITORY%/*}.github.io/${GITHUB_REPOSITORY#*/}/}"
-          RELEASE_BODY=$(gh release view "$TAG" -R "$REPO" --json body --jq .body 2>/dev/null || true)
-          if [ -n "$RELEASE_BODY" ]; then
-            RELEASE_BODY="$(printf '%s' "$RELEASE_BODY" | tr -d '\r' | head -c 1800)"
-          fi
+          RELEASE_BODY="$(gh release view "$TAG" -R "$REPO" --json body --jq .body 2>/dev/null || true)"
+          RELEASE_BODY="$(printf '%s' "$RELEASE_BODY" | tr -d '\r')"
 
-          content=$(
+          base_content=$(
             printf '%s\n' \
               "M5MonsterC5-CardputerADV" \
               "Release ${TAG} published." \
@@ -413,8 +470,16 @@ jobs:
               "K132 full image:" \
               "${FULL_K132_BIN}" \
               "K132 ZIP:" \
-              "${ZIP_K132}" \
-              "${RELEASE_BODY}"
+              "${ZIP_K132}"
           )
+
+          base_len=$(printf '%s' "$base_content" | wc -c | tr -d ' ')
+          room=$((1990 - base_len))
+          if [ "$room" -gt 0 ] && [ -n "$(printf '%s' "$RELEASE_BODY" | tr -d '\n[:space:]')" ]; then
+            body_trimmed="$(printf '%s' "$RELEASE_BODY" | head -c "$room")"
+            content="$(printf '%s\n%s' "$base_content" "$body_trimmed")"
+          else
+            content="$base_content"
+          fi
           payload=$(jq -n --arg content "$content" '{content:$content}')
           curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"

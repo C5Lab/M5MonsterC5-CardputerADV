@@ -125,26 +125,11 @@ static int get_menu_row(const settings_screen_data_t *data, int index)
     return (index - data->scroll_offset) + 1;
 }
 
-static void draw_screen(screen_t *self)
+static void draw_status(settings_screen_data_t *data)
 {
-    settings_screen_data_t *data = (settings_screen_data_t *)self->user_data;
     char status[32];
     uint8_t page_current = (uint8_t)((data->scroll_offset / VISIBLE_ITEMS) + 1);
     uint8_t page_total = (uint8_t)((MENU_ITEM_COUNT + VISIBLE_ITEMS - 1) / VISIBLE_ITEMS);
-
-    ui_clear();
-
-    // Draw title
-    ui_draw_title("Settings");
-
-    int visible_end = data->scroll_offset + VISIBLE_ITEMS;
-    if (visible_end > MENU_ITEM_COUNT) {
-        visible_end = MENU_ITEM_COUNT;
-    }
-
-    for (int i = data->scroll_offset; i < visible_end; i++) {
-        draw_menu_item_at(get_menu_row(data, i), i, i == data->selected_index);
-    }
 
     snprintf(status,
              sizeof(status),
@@ -152,6 +137,35 @@ static void draw_screen(screen_t *self)
              (unsigned)page_current,
              (unsigned)page_total);
     ui_draw_status(status);
+}
+
+static void redraw_content(settings_screen_data_t *data)
+{
+    int visible_end = data->scroll_offset + VISIBLE_ITEMS;
+    if (visible_end > MENU_ITEM_COUNT) {
+        visible_end = MENU_ITEM_COUNT;
+    }
+
+    for (int r = 0; r < VISIBLE_ITEMS; r++) {
+        int i = data->scroll_offset + r;
+        int row = r + 1;
+        if (i < visible_end) {
+            draw_menu_item_at(row, i, i == data->selected_index);
+        } else {
+            display_fill_rect(0, row * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+        }
+    }
+
+    draw_status(data);
+}
+
+static void draw_screen(screen_t *self)
+{
+    settings_screen_data_t *data = (settings_screen_data_t *)self->user_data;
+
+    ui_clear();
+    ui_draw_title("Settings");
+    redraw_content(data);
 }
 
 // Optimized: redraw only two changed rows
@@ -228,7 +242,7 @@ static void on_key(screen_t *self, key_code_t key)
                     if (data->selected_index >= MENU_ITEM_COUNT) {
                         data->selected_index = MENU_ITEM_COUNT - 1;
                     }
-                    draw_screen(self);
+                    redraw_content(data);
                 } else {
                     data->selected_index--;
                     redraw_selection(data, old, data->selected_index);
@@ -236,7 +250,7 @@ static void on_key(screen_t *self, key_code_t key)
             } else {
                 data->selected_index = MENU_ITEM_COUNT - 1;
                 data->scroll_offset = (data->selected_index / VISIBLE_ITEMS) * VISIBLE_ITEMS;
-                draw_screen(self);
+                redraw_content(data);
             }
             break;
 
@@ -247,14 +261,14 @@ static void on_key(screen_t *self, key_code_t key)
                 if (data->selected_index >= data->scroll_offset + VISIBLE_ITEMS) {
                     data->scroll_offset += VISIBLE_ITEMS;
                     data->selected_index = data->scroll_offset;
-                    draw_screen(self);
+                    redraw_content(data);
                 } else {
                     redraw_selection(data, old, data->selected_index);
                 }
             } else {
                 data->selected_index = 0;
                 data->scroll_offset = 0;
-                draw_screen(self);
+                redraw_content(data);
             }
             break;
 

@@ -1,4 +1,4 @@
-set(BOARD_SRCS "")
+set(BOARD_SRCS "subghz_rf_settings.c" "subghz_parser.c" "")
 if(NOT DEFINED BOARD OR BOARD STREQUAL "" OR BOARD STREQUAL ".")
     set(BOARD "adv")
 endif()
@@ -23,6 +23,10 @@ idf_component_register(
         "uart_handler.c"
         "settings.c"
         "screen_manager.c"
+        "wardrive_config.c"
+        "iot_recon.c"
+        "subghz_parser.c"
+        "subghz_rf_settings.c"
         "drivers/display.c"
         "drivers/screenshot.c"
         "drivers/battery.c"
@@ -57,6 +61,10 @@ idf_component_register(
         "screens/wardrive_menu_screen.c"
         "screens/wardrive_screen.c"
         "screens/wardrive_upload_screen.c"
+        "screens/wardrive_config_screen.c"
+        "screens/wardrive_blacklist_screen.c"
+        "screens/antisurv_screen.c"
+        "screens/mesh_recon_screen.c"
         "screens/sniff_karma_menu_screen.c"
         "screens/global_sniffer_screen.c"
         "screens/karma_probes_screen.c"
@@ -67,6 +75,7 @@ idf_component_register(
         "screens/bt_scan_screen.c"
         "screens/bt_locator_screen.c"
         "screens/bt_locator_track_screen.c"
+        "screens/bt_jammer_screen.c"
         "screens/placeholder_screen.c"
         "screens/deauth_detector_screen.c"
         "screens/compromised_menu_screen.c"
@@ -91,6 +100,19 @@ idf_component_register(
         "screens/rogue_ap_html_screen.c"
         "screens/rogue_ap_screen.c"
         "screens/wpasec_upload_screen.c"
+        "screens/subghz_menu_screen.c"
+        "screens/subghz_freq_picker_screen.c"
+        "screens/subghz_tesla_screen.c"
+        "screens/subghz_jammer_screen.c"
+        "screens/subghz_listen_screen.c"
+        "screens/subghz_hunter_screen.c"
+        "screens/subghz_scanner_screen.c"
+        "screens/subghz_manage_screen.c"
+        "screens/subghz_weather_screen.c"
+        "screens/subghz_settings_screen.c"
+        "screens/subghz_listen_settings_screen.c"
+        "screens/subghz_hunter_settings_screen.c"
+        "screens/subghz_scanner_settings_screen.c"
     INCLUDE_DIRS 
         "."
         "drivers"

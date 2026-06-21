@@ -39,6 +39,51 @@ typedef struct {
 // Forward declaration
 static void draw_screen(screen_t *self);
 
+static void draw_title(bt_scan_data_t *data)
+{
+    char title[32];
+    snprintf(title, sizeof(title), "BT Scan (%d)", data->device_count);
+    ui_draw_title(title);
+}
+
+static void draw_list(bt_scan_data_t *data)
+{
+    const int visible_rows = 6;
+    const int start_row = 1;
+
+    for (int i = 0; i < visible_rows; i++) {
+        int row = start_row + i;
+        int dev_idx = data->scroll_offset + i;
+        display_fill_rect(0, row * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+
+        if (dev_idx < data->device_count) {
+            bt_device_t *dev = &data->devices[dev_idx];
+            char line[40];
+
+            if (dev->name[0] != '\0') {
+                snprintf(line, sizeof(line), "%.18s %ddB", dev->name, dev->rssi);
+            } else {
+                snprintf(line, sizeof(line), "%s %ddB", dev->mac, dev->rssi);
+            }
+
+            ui_print(0, row, line, UI_COLOR_TEXT);
+        }
+    }
+
+    if (data->device_count == 0) {
+        ui_print_center(3,
+                        data->loading ? "Scanning..." : "No devices found",
+                        UI_COLOR_DIMMED);
+    }
+
+    if (data->scroll_offset > 0) {
+        ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
+    }
+    if (data->scroll_offset + visible_rows < data->device_count) {
+        ui_print(UI_COLS - 2, visible_rows, "v", UI_COLOR_DIMMED);
+    }
+}
+
 /**
  * @brief Check if line is an ESP log line
  */
@@ -148,50 +193,8 @@ static void draw_screen(screen_t *self)
     bt_scan_data_t *data = (bt_scan_data_t *)self->user_data;
     
     ui_clear();
-    
-    // Draw title with count
-    char title[32];
-    snprintf(title, sizeof(title), "BT Scan (%d)", data->device_count);
-    ui_draw_title(title);
-    
-    if (data->loading && data->device_count == 0) {
-        ui_print_center(3, "Scanning...", UI_COLOR_DIMMED);
-    } else if (data->device_count == 0) {
-        ui_print_center(3, "No devices found", UI_COLOR_DIMMED);
-    } else {
-        // Draw visible devices
-        int visible_rows = 6;
-        int start_row = 1;
-        
-        for (int i = 0; i < visible_rows; i++) {
-            int dev_idx = data->scroll_offset + i;
-            
-            if (dev_idx < data->device_count) {
-                bt_device_t *dev = &data->devices[dev_idx];
-                char line[40];
-                
-                if (dev->name[0] != '\0') {
-                    // Show name and RSSI
-                    snprintf(line, sizeof(line), "%.18s %ddB", dev->name, dev->rssi);
-                } else {
-                    // Show MAC and RSSI
-                    snprintf(line, sizeof(line), "%s %ddB", dev->mac, dev->rssi);
-                }
-                
-                ui_print(0, start_row + i, line, UI_COLOR_TEXT);
-            }
-        }
-        
-        // Scroll indicators
-        if (data->scroll_offset > 0) {
-            ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
-        }
-        if (data->scroll_offset + visible_rows < data->device_count) {
-            ui_print(UI_COLS - 2, visible_rows, "v", UI_COLOR_DIMMED);
-        }
-    }
-    
-    // Draw status bar
+    draw_title(data);
+    draw_list(data);
     ui_draw_status("UP/DOWN:Scroll ESC:Back");
 }
 
@@ -201,7 +204,8 @@ static void on_tick(screen_t *self)
     
     if (data->needs_redraw) {
         data->needs_redraw = false;
-        draw_screen(self);
+        draw_title(data);
+        draw_list(data);
     }
 }
 
@@ -216,11 +220,11 @@ static void on_key(screen_t *self, key_code_t key)
                 // Page jump up
                 data->scroll_offset -= visible_rows;
                 if (data->scroll_offset < 0) data->scroll_offset = 0;
-                draw_screen(self);
+                draw_list(data);
             } else if (data->device_count > visible_rows) {
                 int max_offset = ((data->device_count - 1) / visible_rows) * visible_rows;
                 data->scroll_offset = max_offset;
-                draw_screen(self);
+                draw_list(data);
             }
             break;
             
@@ -228,10 +232,10 @@ static void on_key(screen_t *self, key_code_t key)
             if (data->scroll_offset + visible_rows < data->device_count) {
                 // Page jump down - don't adjust back for partial pages
                 data->scroll_offset += visible_rows;
-                draw_screen(self);
+                draw_list(data);
             } else if (data->device_count > visible_rows) {
                 data->scroll_offset = 0;
-                draw_screen(self);
+                draw_list(data);
             }
             break;
             

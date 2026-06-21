@@ -40,6 +40,55 @@ typedef struct {
 // Forward declaration
 static void draw_screen(screen_t *self);
 
+static void draw_result_line(sniffer_results_data_t *data, int line_idx)
+{
+    const int visible_rows = 6;
+    const int start_row = 1;
+    int row_offset = line_idx - data->scroll_offset;
+    if (row_offset < 0 || row_offset >= visible_rows || line_idx >= data->line_count) return;
+
+    const char *line = data->lines[line_idx];
+    bool is_selected = (line_idx == data->selected_index);
+    bool is_mac = (line[0] == ' ');
+    uint16_t color = is_selected ? UI_COLOR_SELECTED :
+                     (is_mac ? UI_COLOR_DIMMED : UI_COLOR_HIGHLIGHT);
+    char display[31];
+    display[0] = is_selected ? '>' : ' ';
+    strncpy(display + 1, line, 29);
+    display[30] = '\0';
+    ui_print(0, start_row + row_offset, display, color);
+}
+
+static void draw_content(sniffer_results_data_t *data)
+{
+    const int visible_rows = 6;
+    const int start_row = 1;
+
+    for (int i = 0; i < visible_rows; i++) {
+        display_fill_rect(0, (start_row + i) * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+    }
+
+    if (data->loading) {
+        ui_print_center(3, "Loading...", UI_COLOR_DIMMED);
+    } else if (data->line_count == 0) {
+        ui_print_center(3, "No results", UI_COLOR_DIMMED);
+    } else {
+        for (int i = 0; i < visible_rows; i++) {
+            int line_idx = data->scroll_offset + i;
+            if (line_idx < data->line_count) {
+                draw_result_line(data, line_idx);
+            }
+        }
+
+        if (data->scroll_offset > 0) {
+            ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
+        }
+        if (data->scroll_offset + visible_rows < data->line_count) {
+            ui_print(UI_COLS - 2, visible_rows, "v", UI_COLOR_DIMMED);
+        }
+    }
+}
+
 /**
  * @brief Check if line is an ESP log line (starts with I/W/E/D followed by space and parenthesis)
  */
@@ -309,63 +358,8 @@ static void draw_screen(screen_t *self)
     sniffer_results_data_t *data = (sniffer_results_data_t *)self->user_data;
     
     ui_clear();
-    
-    // Draw title
     ui_draw_title("Sniffer Results");
-    
-    if (data->loading) {
-        ui_print_center(3, "Loading...", UI_COLOR_DIMMED);
-    } else if (data->line_count == 0) {
-        ui_print_center(3, "No results", UI_COLOR_DIMMED);
-    } else {
-        // Draw visible lines
-        int visible_rows = 6;
-        int start_row = 1;
-        
-        for (int i = 0; i < visible_rows; i++) {
-            int line_idx = data->scroll_offset + i;
-            
-            if (line_idx < data->line_count) {
-                const char *line = data->lines[line_idx];
-                bool is_selected = (line_idx == data->selected_index);
-                bool is_mac = (line[0] == ' ');
-                uint16_t color;
-                
-                // Determine color based on selection and type
-                if (is_selected) {
-                    color = UI_COLOR_SELECTED;
-                } else if (is_mac) {
-                    color = UI_COLOR_DIMMED;
-                } else {
-                    color = UI_COLOR_HIGHLIGHT;
-                }
-                
-                // Build display string with selection indicator
-                char display[31];
-                if (is_selected) {
-                    display[0] = '>';
-                    strncpy(display + 1, line, 29);
-                    display[30] = '\0';
-                } else {
-                    display[0] = ' ';
-                    strncpy(display + 1, line, 29);
-                    display[30] = '\0';
-                }
-                
-                ui_print(0, start_row + i, display, color);
-            }
-        }
-        
-        // Scroll indicators
-        if (data->scroll_offset > 0) {
-            ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
-        }
-        if (data->scroll_offset + visible_rows < data->line_count) {
-            ui_print(UI_COLS - 2, visible_rows, "v", UI_COLOR_DIMMED);
-        }
-    }
-    
-    // Draw status bar
+    draw_content(data);
     ui_draw_status("UP/DN:Sel D:Deauth ESC:Back");
 }
 
@@ -376,7 +370,7 @@ static void on_tick(screen_t *self)
     // Check if redraw needed from UART callback (thread-safe)
     if (data->needs_redraw) {
         data->needs_redraw = false;
-        draw_screen(self);
+        draw_content(data);
     }
 }
 
@@ -397,30 +391,16 @@ static void on_key(screen_t *self, key_code_t key)
                     if (data->selected_index >= data->line_count) {
                         data->selected_index = data->line_count - 1;
                     }
-                    draw_screen(self);  // Full redraw on page jump
+                    draw_content(data);
                 } else {
                     data->selected_index--;
-                    // Redraw only 2 rows
-                    int start_row = 1;
-                    for (int idx = old_idx; idx >= data->selected_index; idx--) {
-                        int i = idx - data->scroll_offset;
-                        if (i >= 0 && i < visible_rows && idx < data->line_count) {
-                            const char *line = data->lines[idx];
-                            bool is_selected = (idx == data->selected_index);
-                            bool is_mac = (line[0] == ' ');
-                            uint16_t color = is_selected ? UI_COLOR_SELECTED : (is_mac ? UI_COLOR_DIMMED : UI_COLOR_HIGHLIGHT);
-                            char display[31];
-                            display[0] = is_selected ? '>' : ' ';
-                            strncpy(display + 1, line, 29);
-                            display[30] = '\0';
-                            ui_print(0, start_row + i, display, color);
-                        }
-                    }
+                    draw_result_line(data, old_idx);
+                    draw_result_line(data, data->selected_index);
                 }
             } else if (data->line_count > 0) {
                 data->selected_index = data->line_count - 1;
                 data->scroll_offset = (data->selected_index / visible_rows) * visible_rows;
-                draw_screen(self);
+                draw_content(data);
             }
             break;
             
@@ -432,30 +412,16 @@ static void on_key(screen_t *self, key_code_t key)
                     // Jump to next page - don't adjust back for partial pages
                     data->scroll_offset += visible_rows;
                     data->selected_index = data->scroll_offset;
-                    draw_screen(self);  // Full redraw on page jump
+                    draw_content(data);
                 } else {
                     data->selected_index++;
-                    // Redraw only 2 rows
-                    int start_row = 1;
-                    for (int idx = old_idx; idx <= data->selected_index; idx++) {
-                        int i = idx - data->scroll_offset;
-                        if (i >= 0 && i < visible_rows && idx < data->line_count) {
-                            const char *line = data->lines[idx];
-                            bool is_selected = (idx == data->selected_index);
-                            bool is_mac = (line[0] == ' ');
-                            uint16_t color = is_selected ? UI_COLOR_SELECTED : (is_mac ? UI_COLOR_DIMMED : UI_COLOR_HIGHLIGHT);
-                            char display[31];
-                            display[0] = is_selected ? '>' : ' ';
-                            strncpy(display + 1, line, 29);
-                            display[30] = '\0';
-                            ui_print(0, start_row + i, display, color);
-                        }
-                    }
+                    draw_result_line(data, old_idx);
+                    draw_result_line(data, data->selected_index);
                 }
             } else if (data->line_count > 0) {
                 data->selected_index = 0;
                 data->scroll_offset = 0;
-                draw_screen(self);
+                draw_content(data);
             }
             break;
             

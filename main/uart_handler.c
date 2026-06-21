@@ -44,9 +44,14 @@ static SemaphoreHandle_t uart_mutex = NULL;
 // WiFi client connection state
 static bool wifi_connected = false;
 static bool wardrive_active = false;
+static bool antisurv_active = false;
 
 // Board ping detection state
 static volatile bool pong_received = false;
+
+// Sub-GHz availability detection state
+static volatile bool subghz_status_seen = false;
+static bool          subghz_available_cached = false;
 
 // Line buffer
 static char line_buffer[1024];
@@ -413,6 +418,16 @@ void uart_set_wardrive_active(bool active)
     wardrive_active = active;
 }
 
+bool uart_is_antisurv_active(void)
+{
+    return antisurv_active;
+}
+
+void uart_set_antisurv_active(bool active)
+{
+    antisurv_active = active;
+}
+
 /**
  * @brief Callback to detect pong response
  */
@@ -460,4 +475,52 @@ bool uart_check_board_ping(int timeout_ms)
     }
     
     return pong_received;
+}
+
+static void subghz_status_response_callback(const char *line, void *user_data)
+{
+    (void)user_data;
+    if (!line) return;
+    if (strncmp(line, "[SUBGHZ_STATUS]", 15) == 0) {
+        subghz_status_seen = true;
+        ESP_LOGI(TAG, "Sub-GHz module detected: %s", line);
+    }
+}
+
+bool uart_check_subghz_available(int timeout_ms)
+{
+    ESP_LOGI(TAG, "Probing for Sub-GHz module (subghz_status)...");
+
+    subghz_status_seen = false;
+
+    uart_response_callback_t old_callback = line_callback;
+    void *old_user_data = line_callback_user_data;
+
+    uart_register_line_callback(subghz_status_response_callback, NULL);
+
+    uart_send_command("subghz_status");
+
+    int elapsed = 0;
+    const int check_interval = 10;
+    while (elapsed < timeout_ms && !subghz_status_seen) {
+        vTaskDelay(pdMS_TO_TICKS(check_interval));
+        elapsed += check_interval;
+    }
+
+    uart_register_line_callback(old_callback, old_user_data);
+
+    subghz_available_cached = subghz_status_seen;
+
+    if (subghz_available_cached) {
+        ESP_LOGI(TAG, "Sub-GHz module available");
+    } else {
+        ESP_LOGW(TAG, "Sub-GHz module not detected (timeout after %dms)", timeout_ms);
+    }
+
+    return subghz_available_cached;
+}
+
+bool uart_is_subghz_available(void)
+{
+    return subghz_available_cached;
 }
