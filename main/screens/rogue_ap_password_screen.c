@@ -227,7 +227,7 @@ static void on_key(screen_t *self, key_code_t key)
                 // Open text input for password
                 data->state = STATE_WAITING_INPUT;
                 
-                text_input_params_t *params = malloc(sizeof(text_input_params_t));
+                text_input_params_t *params = calloc(1, sizeof(text_input_params_t));
                 if (params) {
                     params->title = "Enter Password";
                     params->hint = NULL;

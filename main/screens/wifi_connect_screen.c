@@ -270,7 +270,7 @@ static void start_scan(wifi_connect_data_t *data)
 static void push_password_input(wifi_connect_data_t *data)
 {
     data->state = STATE_ENTER_PASSWORD;
-    text_input_params_t *params = malloc(sizeof(text_input_params_t));
+    text_input_params_t *params = calloc(1, sizeof(text_input_params_t));
     if (params) {
         params->title = "Enter Password";
         params->hint = "WiFi password (empty=open)";

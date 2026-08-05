@@ -21,6 +21,8 @@ typedef struct {
     text_input_callback_t on_submit;
     void *callback_user_data;
     bool allow_empty;
+    size_t max_length;
+    bool masked;
 } text_input_data_t;
 
 /**
@@ -110,10 +112,23 @@ static void draw_screen(screen_t *self)
     
     int row = 2;
     
-    // Draw input field with cursor
+    // Draw input field with cursor, masked when the value is a password
     char display[TEXT_INPUT_MAX_LEN + 2];
-    snprintf(display, sizeof(display), "%s_", data->input);
-    ui_print(0, row, display, UI_COLOR_HIGHLIGHT);
+    size_t n = strnlen(data->input, TEXT_INPUT_MAX_LEN);
+    if (data->masked) {
+        memset(display, '*', n);
+    } else {
+        memcpy(display, data->input, n);
+    }
+    display[n] = '_';
+    display[n + 1] = '\0';
+
+    // Values longer than the display: show the tail so the cursor stays visible
+    const char *view = display;
+    if (n + 1 > (size_t)(UI_COLS - 1)) {
+        view = display + (n + 1) - (UI_COLS - 1);
+    }
+    ui_print(0, row, view, UI_COLOR_HIGHLIGHT);
     row += 2;
     
     // Draw hint
@@ -156,7 +171,7 @@ static void on_key(screen_t *self, key_code_t key)
             {
                 // Try to add character
                 char ch = key_to_char(key);
-                if (ch && data->cursor_pos < TEXT_INPUT_MAX_LEN) {
+                if (ch && data->cursor_pos < (int)data->max_length) {
                     data->input[data->cursor_pos++] = ch;
                     data->input[data->cursor_pos] = '\0';
                     draw_screen(self);
@@ -172,6 +187,7 @@ static void on_destroy(screen_t *self)
     keyboard_set_text_input_mode(false);
     
     if (self->user_data) {
+        memset(self->user_data, 0, sizeof(text_input_data_t));
         free(self->user_data);
     }
 }
@@ -211,6 +227,13 @@ screen_t* text_input_screen_create(void *params)
     data->on_submit = input_params->on_submit;
     data->callback_user_data = input_params->user_data;
     data->allow_empty = input_params->allow_empty;
+    data->max_length = input_params->max_length;
+    if (data->max_length == 0) {
+        data->max_length = TEXT_INPUT_DEFAULT_MAX_LEN;
+    } else if (data->max_length > TEXT_INPUT_MAX_LEN) {
+        data->max_length = TEXT_INPUT_MAX_LEN;
+    }
+    data->masked = input_params->masked;
     data->cursor_pos = 0;
     data->input[0] = '\0';
     

@@ -8,6 +8,7 @@
 #include "vendor_lookup_screen.h"
 #include "gps_module_screen.h"
 #include "channel_time_settings_screen.h"
+#include "sd_admin_screen.h"
 #include "settings.h"
 #include "display.h"
 #include "keyboard.h"
@@ -24,11 +25,12 @@ static const char *TAG = "SETTINGS_SCREEN";
 #define MENU_VENDOR_LOOKUP  1
 #define MENU_GPS_MODULE     2
 #define MENU_CHANNEL_TIME   3
-#define MENU_SCR_TIMEOUT    4
-#define MENU_SCR_BRIGHT     5
-#define MENU_SOUND          6
-#define MENU_RED_TEAM       7
-#define MENU_ITEM_COUNT     8
+#define MENU_SD_ADMIN       4
+#define MENU_SCR_TIMEOUT    5
+#define MENU_SCR_BRIGHT     6
+#define MENU_SOUND          7
+#define MENU_RED_TEAM       8
+#define MENU_ITEM_COUNT     9
 #define VISIBLE_ITEMS       6
 
 // Screen dimming timeout options (in ms)
@@ -95,6 +97,9 @@ static void draw_menu_item_at(int row, int index, bool selected)
             break;
         case MENU_CHANNEL_TIME:
             ui_draw_menu_item(row, "Channel Time", selected, false, false);
+            break;
+        case MENU_SD_ADMIN:
+            ui_draw_menu_item(row, "Monster SD Admin", selected, false, false);
             break;
         case MENU_SCR_TIMEOUT:
         {
@@ -317,6 +322,9 @@ static void on_key(screen_t *self, key_code_t key)
                     break;
                 case MENU_CHANNEL_TIME:
                     screen_manager_push(channel_time_settings_screen_create, NULL);
+                    break;
+                case MENU_SD_ADMIN:
+                    screen_manager_push(sd_admin_screen_create, NULL);
                     break;
                 case MENU_SCR_TIMEOUT:
                     // ENTER also cycles timeout forward
