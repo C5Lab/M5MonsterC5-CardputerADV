@@ -232,7 +232,7 @@ static void on_key(screen_t *self, key_code_t key)
 
         case KEY_A:
             {
-                text_input_params_t *params = malloc(sizeof(text_input_params_t));
+                text_input_params_t *params = calloc(1, sizeof(text_input_params_t));
                 if (params) {
                     params->title = "Add SSID";
                     params->hint = "Type SSID, ENTER to add";

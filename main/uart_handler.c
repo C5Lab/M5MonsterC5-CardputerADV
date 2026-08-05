@@ -314,6 +314,21 @@ esp_err_t uart_send_command(const char *cmd)
     return (written == len) ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t uart_send_sensitive_command(const char *cmd)
+{
+    if (!cmd) return ESP_ERR_INVALID_ARG;
+
+    xSemaphoreTake(uart_mutex, portMAX_DELAY);
+    /* Do not log cmd: callers use this for WPA2 passwords and other secrets. */
+    int len = strlen(cmd);
+    int written = uart_write_bytes(UART_PORT_NUM, cmd, len);
+    if (len < 2 || cmd[len - 2] != '\r' || cmd[len - 1] != '\n') {
+        uart_write_bytes(UART_PORT_NUM, "\r\n", 2);
+    }
+    xSemaphoreGive(uart_mutex);
+    return (written == len) ? ESP_OK : ESP_FAIL;
+}
+
 void uart_register_line_callback(uart_response_callback_t callback, void *user_data)
 {
     xSemaphoreTake(uart_mutex, portMAX_DELAY);

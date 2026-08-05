@@ -54,6 +54,14 @@ esp_err_t uart_handler_init(void);
 esp_err_t uart_send_command(const char *cmd);
 
 /**
+ * @brief Send a command that contains a secret without writing it to logs.
+ *
+ * The command is still serialized with the regular UART mutex and terminated
+ * with CRLF when necessary.
+ */
+esp_err_t uart_send_sensitive_command(const char *cmd);
+
+/**
  * @brief Register a callback for line-by-line response
  * @param callback Function to call for each line received
  * @param user_data User data to pass to callback

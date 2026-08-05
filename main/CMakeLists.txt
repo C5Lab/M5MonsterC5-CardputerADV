@@ -57,6 +57,7 @@ idf_component_register(
         "screens/text_input_screen.c"
         "screens/global_portal_html_screen.c"
         "screens/global_portal_screen.c"
+        "screens/sd_admin_screen.c"
         "screens/sniffer_dog_screen.c"
         "screens/wardrive_menu_screen.c"
         "screens/wardrive_screen.c"
@@ -132,6 +133,7 @@ idf_component_register(
         sdmmc
         esp_adc
         nvs_flash
+        espressif__qrcode
 )
 
 if(BOARD_LOWER STREQUAL "adv")

@@ -150,7 +150,7 @@ static void on_key(screen_t *self, key_code_t key)
                         
                     case GLOBAL_ATK_PORTAL:
                         {
-                            text_input_params_t *params = malloc(sizeof(text_input_params_t));
+                            text_input_params_t *params = calloc(1, sizeof(text_input_params_t));
                             if (params) {
                                 params->title = "Enter Portal SSID";
                                 params->hint = "Use keyboard, ENTER to confirm";

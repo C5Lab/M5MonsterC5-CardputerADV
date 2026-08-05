@@ -212,7 +212,7 @@ static void on_tick(screen_t *self)
     if (data->needs_push_password) {
         data->needs_push_password = false;
         
-        text_input_params_t *params = malloc(sizeof(text_input_params_t));
+        text_input_params_t *params = calloc(1, sizeof(text_input_params_t));
         if (params) {
             params->title = "Enter Password";
             params->hint = "WiFi password";
