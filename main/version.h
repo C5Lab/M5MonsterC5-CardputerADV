@@ -1,6 +1,6 @@
 #ifndef VERSION_H
 #define VERSION_H
 
-#define JANOS_ADV_VERSION "1.8.5"
+#define JANOS_ADV_VERSION "1.8.6"
 
 #endif // VERSION_H
