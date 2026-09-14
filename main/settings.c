@@ -19,6 +19,7 @@ static const char *TAG = "SETTINGS";
 #define NVS_KEY_SCR_BRIGHT  "scr_bright"
 #define NVS_KEY_SOUND       "sound"
 #define NVS_KEY_GPS_TYPE    "gps_type"
+#define NVS_KEY_BAT_VOLT    "bat_volt"
 
 // Cached values
 static int uart_tx_pin = DEFAULT_UART_TX_PIN;
@@ -28,6 +29,7 @@ static uint32_t screen_timeout_ms = DEFAULT_SCREEN_TIMEOUT_MS;
 static uint8_t screen_brightness = DEFAULT_SCREEN_BRIGHTNESS;
 static bool sound_enabled = DEFAULT_SOUND_ENABLED;
 static gps_type_t gps_type = GPS_TYPE_ATGM;  // Default: ATGM
+static bool battery_show_voltage = false;  // Default: show percentage on top bar
 
 // Reserved GPIO pins that should not be used (ESP32-S3 specific)
 // These include strapping pins, flash/PSRAM pins, USB pins, etc.
@@ -144,7 +146,13 @@ esp_err_t settings_init(void)
             }
             ESP_LOGI(TAG, "Loaded GPS type: %d", gps_type);
         }
-        
+
+        uint8_t bat_volt_val = 0;
+        if (nvs_get_u8(handle, NVS_KEY_BAT_VOLT, &bat_volt_val) == ESP_OK) {
+            battery_show_voltage = (bat_volt_val != 0);
+            ESP_LOGI(TAG, "Loaded battery display: %s", battery_show_voltage ? "voltage" : "percent");
+        }
+
         nvs_close(handle);
     } else if (ret == ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGI(TAG, "No settings found, using defaults (TX=%d, RX=%d)", 
@@ -405,5 +413,40 @@ esp_err_t settings_set_gps_type(gps_type_t type)
     gps_type = type;
     
     ESP_LOGI(TAG, "GPS type saved: %d", type);
+    return ESP_OK;
+}
+
+bool settings_get_battery_show_voltage(void)
+{
+    return battery_show_voltage;
+}
+
+esp_err_t settings_set_battery_show_voltage(bool show_voltage)
+{
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS for writing: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = nvs_set_u8(handle, NVS_KEY_BAT_VOLT, show_voltage ? 1 : 0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write battery display: %s", esp_err_to_name(ret));
+        nvs_close(handle);
+        return ret;
+    }
+
+    ret = nvs_commit(handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to commit NVS: %s", esp_err_to_name(ret));
+        nvs_close(handle);
+        return ret;
+    }
+
+    nvs_close(handle);
+    battery_show_voltage = show_voltage;
+
+    ESP_LOGI(TAG, "Battery display saved: %s", show_voltage ? "voltage" : "percent");
     return ESP_OK;
 }

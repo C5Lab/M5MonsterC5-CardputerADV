@@ -29,8 +29,9 @@ static const char *TAG = "SETTINGS_SCREEN";
 #define MENU_SCR_TIMEOUT    5
 #define MENU_SCR_BRIGHT     6
 #define MENU_SOUND          7
-#define MENU_RED_TEAM       8
-#define MENU_ITEM_COUNT     9
+#define MENU_BAT_DISPLAY    8
+#define MENU_RED_TEAM       9
+#define MENU_ITEM_COUNT     10
 #define VISIBLE_ITEMS       6
 
 // Screen dimming timeout options (in ms)
@@ -118,6 +119,11 @@ static void draw_menu_item_at(int row, int index, bool selected)
         }
         case MENU_SOUND:
             ui_draw_menu_item(row, "Enable Sound", selected, true, sound_enabled);
+            break;
+        case MENU_BAT_DISPLAY:
+            format_setting_line(line, sizeof(line), "Batt Display",
+                                settings_get_battery_show_voltage() ? "Voltage" : "Percent");
+            ui_draw_menu_item(row, line, selected, false, false);
             break;
         case MENU_RED_TEAM:
             ui_draw_menu_item(row, "Enable Red Team", selected, true, red_team);
@@ -289,6 +295,9 @@ static void on_key(screen_t *self, key_code_t key)
             } else if (data->selected_index == MENU_SOUND && settings_get_sound_enabled()) {
                 settings_set_sound_enabled(false);
                 draw_menu_item_at(get_menu_row(data, MENU_SOUND), MENU_SOUND, true);
+            } else if (data->selected_index == MENU_BAT_DISPLAY) {
+                settings_set_battery_show_voltage(!settings_get_battery_show_voltage());
+                draw_menu_item_at(get_menu_row(data, MENU_BAT_DISPLAY), MENU_BAT_DISPLAY, true);
             }
             break;
 
@@ -304,6 +313,9 @@ static void on_key(screen_t *self, key_code_t key)
             } else if (data->selected_index == MENU_SOUND && !settings_get_sound_enabled()) {
                 settings_set_sound_enabled(true);
                 draw_menu_item_at(get_menu_row(data, MENU_SOUND), MENU_SOUND, true);
+            } else if (data->selected_index == MENU_BAT_DISPLAY) {
+                settings_set_battery_show_voltage(!settings_get_battery_show_voltage());
+                draw_menu_item_at(get_menu_row(data, MENU_BAT_DISPLAY), MENU_BAT_DISPLAY, true);
             }
             break;
 
@@ -337,6 +349,10 @@ static void on_key(screen_t *self, key_code_t key)
                 case MENU_SOUND:
                     settings_set_sound_enabled(!settings_get_sound_enabled());
                     draw_menu_item_at(get_menu_row(data, MENU_SOUND), MENU_SOUND, true);
+                    break;
+                case MENU_BAT_DISPLAY:
+                    settings_set_battery_show_voltage(!settings_get_battery_show_voltage());
+                    draw_menu_item_at(get_menu_row(data, MENU_BAT_DISPLAY), MENU_BAT_DISPLAY, true);
                     break;
                 case MENU_RED_TEAM:
                     if (settings_get_red_team_enabled()) {

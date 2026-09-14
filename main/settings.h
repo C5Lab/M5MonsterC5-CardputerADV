@@ -128,6 +128,19 @@ gps_type_t settings_get_gps_type(void);
  */
 esp_err_t settings_set_gps_type(gps_type_t type);
 
+/**
+ * @brief Get top-bar battery display mode
+ * @return true to show voltage (e.g. 3.52V), false to show percentage (default)
+ */
+bool settings_get_battery_show_voltage(void);
+
+/**
+ * @brief Set top-bar battery display mode
+ * @param show_voltage true = voltage, false = percentage
+ * @return ESP_OK on success
+ */
+esp_err_t settings_set_battery_show_voltage(bool show_voltage);
+
 #endif // SETTINGS_H
 
 
