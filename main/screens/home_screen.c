@@ -34,20 +34,23 @@ typedef struct {
     bool        subghz_only;    // If true, only shown when subghz module probe succeeded
 } menu_item_t;
 
-// All possible menu candidates, in display order. Sub-GHz sits right after
-// Network Tools and is only included when uart_is_subghz_available() returns
-// true (probed once at boot).
+// All possible menu candidates, in display order. The first page (6 items)
+// holds the primary tools; Mesh Recon and Compromised data live on page 2.
+// Sub-GHz is only included when uart_is_subghz_available() returns true
+// (probed once at boot).
 static const menu_item_t all_menu_items[] = {
+    // --- Page 1 ---
     {"WiFi Scan & Attack", "WiFi Scan & Test", wifi_scan_screen_create, NULL, false},
-    {"Bluetooth", "Bluetooth", bt_menu_screen_create, NULL, false},
-    {"Compromised data", "Compromised data", compromised_menu_screen_create, NULL, false},
-    {"Deauth Detector", "Deauth Detector", deauth_detector_screen_create, NULL, false},
     {"Global WiFi Attacks", "Global WiFi Tests", global_attacks_screen_create, NULL, false},
-    {"Mesh Recon", "Mesh Recon", mesh_recon_screen_create, NULL, false},
     {"Network Tools", "Network Tools", network_attacks_screen_create, NULL, false},
-    {"Sub-GHz", "Sub-GHz", subghz_menu_screen_create, NULL, true},
     {"Wardrive", "Wardrive", wardrive_menu_screen_create, NULL, false},
     {"WiFi Sniff&Karma", "WiFi Sniff&Karma", sniff_karma_menu_screen_create, NULL, false},
+    {"Deauth Detector", "Deauth Detector", deauth_detector_screen_create, NULL, false},
+    // --- Page 2 ---
+    {"Mesh Recon", "Mesh Recon", mesh_recon_screen_create, NULL, false},
+    {"Compromised data", "Compromised data", compromised_menu_screen_create, NULL, false},
+    {"Bluetooth", "Bluetooth", bt_menu_screen_create, NULL, false},
+    {"Sub-GHz", "Sub-GHz", subghz_menu_screen_create, NULL, true},
     {"Settings", "Settings", settings_screen_create, NULL, false},
 };
 
