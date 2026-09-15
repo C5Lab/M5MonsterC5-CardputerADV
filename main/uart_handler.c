@@ -57,6 +57,13 @@ static bool          subghz_available_cached = false;
 static char line_buffer[1024];
 static int line_pos = 0;
 
+static SemaphoreHandle_t collect_done = NULL;
+static volatile bool collect_active = false;
+static const char *collect_end_tag = NULL;
+static uart_collect_cb_t collect_cb = NULL;
+static void *collect_cb_user = NULL;
+static volatile bool collect_got_end = false;
+
 /**
  * @brief Log current memory info
  */
@@ -161,6 +168,24 @@ static void process_line(const char *line)
         line_callback(line, line_callback_user_data);
     }
 
+    if (collect_active) {
+        if (collect_cb) {
+            collect_cb(line, collect_cb_user);
+        }
+        if (collect_end_tag && strstr(line, collect_end_tag)) {
+            collect_got_end = true;
+            if (collect_done) {
+                xSemaphoreGive(collect_done);
+            }
+        }
+        if (strstr(line, "[SUBGHZ_EXT_ERR]")) {
+            collect_got_end = true;
+            if (collect_done) {
+                xSemaphoreGive(collect_done);
+            }
+        }
+    }
+
     // Handle scan mode
     if (is_scanning) {
         // Check for scan completion
@@ -250,6 +275,11 @@ esp_err_t uart_handler_init(void)
     uart_mutex = xSemaphoreCreateMutex();
     if (!uart_mutex) {
         ESP_LOGE(TAG, "Failed to create mutex");
+        return ESP_FAIL;
+    }
+    collect_done = xSemaphoreCreateBinary();
+    if (!collect_done) {
+        ESP_LOGE(TAG, "Failed to create collect semaphore");
         return ESP_FAIL;
     }
 
@@ -538,4 +568,52 @@ bool uart_check_subghz_available(int timeout_ms)
 bool uart_is_subghz_available(void)
 {
     return subghz_available_cached;
+}
+
+void uart_dispatch_line(const char *line)
+{
+    if (!line || !line[0]) {
+        return;
+    }
+    process_line(line);
+}
+
+esp_err_t uart_collect_begin(const char *end_tag, uart_collect_cb_t cb, void *user_data)
+{
+    if (!end_tag || !collect_done) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(uart_mutex, portMAX_DELAY);
+    if (collect_active) {
+        xSemaphoreGive(uart_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+    collect_end_tag = end_tag;
+    collect_cb = cb;
+    collect_cb_user = user_data;
+    collect_got_end = false;
+    xSemaphoreTake(collect_done, 0);
+    collect_active = true;
+    xSemaphoreGive(uart_mutex);
+    return ESP_OK;
+}
+
+esp_err_t uart_collect_wait(int timeout_ms)
+{
+    if (!collect_done) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    bool ok = xSemaphoreTake(collect_done, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+
+    xSemaphoreTake(uart_mutex, portMAX_DELAY);
+    collect_active = false;
+    collect_cb = NULL;
+    collect_cb_user = NULL;
+    collect_end_tag = NULL;
+    bool got = collect_got_end;
+    xSemaphoreGive(uart_mutex);
+
+    return (ok && got) ? ESP_OK : ESP_ERR_TIMEOUT;
 }

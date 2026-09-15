@@ -10,6 +10,7 @@
 #include "channel_time_settings_screen.h"
 #include "sd_admin_screen.h"
 #include "settings.h"
+#include "subghz_cap_radio.h"
 #include "display.h"
 #include "keyboard.h"
 #include "text_ui.h"
@@ -29,8 +30,9 @@ static const char *TAG = "SETTINGS_SCREEN";
 #define MENU_SCR_TIMEOUT    5
 #define MENU_SCR_BRIGHT     6
 #define MENU_SOUND          7
-#define MENU_RED_TEAM       8
-#define MENU_ITEM_COUNT     9
+#define MENU_CC1101_CAP     8
+#define MENU_RED_TEAM       9
+#define MENU_ITEM_COUNT     10
 #define VISIBLE_ITEMS       6
 
 // Screen dimming timeout options (in ms)
@@ -83,6 +85,7 @@ static void draw_menu_item_at(int row, int index, bool selected)
 {
     bool red_team = settings_get_red_team_enabled();
     bool sound_enabled = settings_get_sound_enabled();
+    bool cc1101_cap = settings_get_use_cc1101_cap();
     char line[40];
 
     switch (index) {
@@ -118,6 +121,9 @@ static void draw_menu_item_at(int row, int index, bool selected)
         }
         case MENU_SOUND:
             ui_draw_menu_item(row, "Enable Sound", selected, true, sound_enabled);
+            break;
+        case MENU_CC1101_CAP:
+            ui_draw_menu_item(row, "Use CC1101 Cap", selected, true, cc1101_cap);
             break;
         case MENU_RED_TEAM:
             ui_draw_menu_item(row, "Enable Red Team", selected, true, red_team);
@@ -207,6 +213,17 @@ static void cycle_timeout(int direction)
  * @brief Adjust screen brightness
  * @param delta Amount to change (-100 to +100)
  */
+static void toggle_cc1101_cap(void)
+{
+    bool next = !settings_get_use_cc1101_cap();
+    settings_set_use_cc1101_cap(next);
+    if (next) {
+        subghz_cap_radio_enable();
+    } else {
+        subghz_cap_radio_disable();
+    }
+}
+
 static void adjust_brightness(int delta)
 {
     int current = (int)settings_get_screen_brightness();
@@ -289,6 +306,9 @@ static void on_key(screen_t *self, key_code_t key)
             } else if (data->selected_index == MENU_SOUND && settings_get_sound_enabled()) {
                 settings_set_sound_enabled(false);
                 draw_menu_item_at(get_menu_row(data, MENU_SOUND), MENU_SOUND, true);
+            } else if (data->selected_index == MENU_CC1101_CAP && settings_get_use_cc1101_cap()) {
+                toggle_cc1101_cap();
+                draw_menu_item_at(get_menu_row(data, MENU_CC1101_CAP), MENU_CC1101_CAP, true);
             }
             break;
 
@@ -304,6 +324,9 @@ static void on_key(screen_t *self, key_code_t key)
             } else if (data->selected_index == MENU_SOUND && !settings_get_sound_enabled()) {
                 settings_set_sound_enabled(true);
                 draw_menu_item_at(get_menu_row(data, MENU_SOUND), MENU_SOUND, true);
+            } else if (data->selected_index == MENU_CC1101_CAP && !settings_get_use_cc1101_cap()) {
+                toggle_cc1101_cap();
+                draw_menu_item_at(get_menu_row(data, MENU_CC1101_CAP), MENU_CC1101_CAP, true);
             }
             break;
 
@@ -337,6 +360,10 @@ static void on_key(screen_t *self, key_code_t key)
                 case MENU_SOUND:
                     settings_set_sound_enabled(!settings_get_sound_enabled());
                     draw_menu_item_at(get_menu_row(data, MENU_SOUND), MENU_SOUND, true);
+                    break;
+                case MENU_CC1101_CAP:
+                    toggle_cc1101_cap();
+                    draw_menu_item_at(get_menu_row(data, MENU_CC1101_CAP), MENU_CC1101_CAP, true);
                     break;
                 case MENU_RED_TEAM:
                     if (settings_get_red_team_enabled()) {

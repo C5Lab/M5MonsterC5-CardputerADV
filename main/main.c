@@ -18,6 +18,7 @@
 #include "home_screen.h"
 #include "battery.h"
 #include "settings.h"
+#include "subghz_cap_radio.h"
 #include "buzzer.h"
 #include "text_ui.h"
 
@@ -258,6 +259,15 @@ void app_main(void)
     // Result is cached in uart_handler and read by home_screen to gate the menu.
     if (board_detected) {
         uart_check_subghz_available(800);
+    }
+
+    if (settings_get_use_cc1101_cap()) {
+        boot_set(0, BSTATE_RUNNING, "CC1101 Cap...");
+        if (subghz_cap_radio_enable() == ESP_OK) {
+            ESP_LOGI(TAG, "CC1101 Cap radio ready");
+        } else {
+            ESP_LOGW(TAG, "CC1101 Cap init failed");
+        }
     }
 
     // Pause so user can read the boot results

@@ -108,6 +108,19 @@ bool settings_get_sound_enabled(void);
  */
 esp_err_t settings_set_sound_enabled(bool enabled);
 
+/**
+ * @brief Get "Use CC1101 Cap" setting
+ * @return true if Cardputer CC1101 Cap radio is used (Monster via subghz_ext_*)
+ */
+bool settings_get_use_cc1101_cap(void);
+
+/**
+ * @brief Set "Use CC1101 Cap" setting (default off)
+ * @param enabled true to use the attached Cap CC1101
+ * @return ESP_OK on success
+ */
+esp_err_t settings_set_use_cc1101_cap(bool enabled);
+
 // GPS module types
 typedef enum {
     GPS_TYPE_ATGM = 0,

@@ -7,7 +7,8 @@
  *                      accumulate [SUBGHZ_LIST] until [SUBGHZ_LIST_END] count=N source=sd
  *   ENTER + Rename:    push text_input_screen, then "subghz_rename <idx> <name>" + refresh
  *   ENTER + Delete:    confirm, then "subghz_delete <idx>" + refresh
- *   ENTER + Transmit:  "subghz_tx <idx> sd" (single shot)
+ *   ENTER + Transmit:  cap mode: subghz_ext_tx sd <idx|name> then local CC1101
+ *                      else "subghz_tx <idx> sd" (Monster radio)
  *   X + Yes:           iteratively "subghz_delete 1" until remaining=0 (firmware
  *                      subghz_clear only wipes mem; SD wipe must be done by the UI)
  *
@@ -21,6 +22,8 @@
 #include "subghz_manage_screen.h"
 #include "subghz_parser.h"
 #include "uart_handler.h"
+#include "settings.h"
+#include "subghz_cap_radio.h"
 #include "text_ui.h"
 #include "text_input_screen.h"
 #include "esp_log.h"
@@ -82,6 +85,7 @@ typedef struct {
     int  multi_tx_remaining;
     int  multi_tx_total;
     int  multi_tx_idx;
+    char multi_tx_name[40];
 
     char status_text[STATUS_BUF_LEN];
     uint16_t status_color;
@@ -195,9 +199,14 @@ static void uart_line_cb(const char *line, void *user_data)
     if (data->multi_tx_active) {
         if (strstr(line, "[SUBGHZ_TX]")) {
             if (data->multi_tx_remaining > 0) {
-                char cmd[32];
-                snprintf(cmd, sizeof(cmd), "subghz_tx %d sd", data->multi_tx_idx);
-                uart_send_command(cmd);
+                if (settings_get_use_cc1101_cap()) {
+                    subghz_cap_tx_sd(data->multi_tx_idx,
+                                     data->multi_tx_name[0] ? data->multi_tx_name : NULL);
+                } else {
+                    char cmd[32];
+                    snprintf(cmd, sizeof(cmd), "subghz_tx %d sd", data->multi_tx_idx);
+                    uart_send_command(cmd);
+                }
                 data->multi_tx_remaining--;
                 char status[STATUS_BUF_LEN];
                 snprintf(status, sizeof(status), "TX %d/%d",
@@ -212,6 +221,14 @@ static void uart_line_cb(const char *line, void *user_data)
                 set_status(data, status, UI_COLOR_HIGHLIGHT);
             }
         }
+        return;
+    }
+
+    if (strstr(line, "[SUBGHZ_EXT_ERR]") && strstr(line, "license")) {
+        set_status(data, "No SubGHz license", RGB565(255, 80, 80));
+        return;
+    }
+    if (strstr(line, "[SUBGHZ_EXT_")) {
         return;
     }
 
@@ -596,6 +613,20 @@ static void perform_transmit(screen_t *self)
     subghz_sd_data_t *data = (subghz_sd_data_t *)self->user_data;
     if (data->selected_index >= data->sig_count) return;
     int idx = data->sigs[data->selected_index].idx;
+    const char *name = data->sigs[data->selected_index].name;
+
+    if (settings_get_use_cc1101_cap()) {
+        if (subghz_cap_tx_sd(idx, name[0] ? name : NULL) == ESP_OK) {
+            char status[32];
+            snprintf(status, sizeof(status), "Sent #%d", idx);
+            set_status(data, status, UI_COLOR_HIGHLIGHT);
+        } else {
+            set_status(data, "TX failed", RGB565(255, 80, 80));
+        }
+        data->view = SD_VIEW_LIST;
+        draw_screen(self);
+        return;
+    }
 
     char cmd[32];
     snprintf(cmd, sizeof(cmd), "subghz_tx %d sd", idx);
@@ -679,9 +710,34 @@ static void on_multi_tx_submit(const char *text, void *user_data)
     if (count > 999) count = 999;
 
     data->multi_tx_idx = data->sigs[data->selected_index].idx;
+    snprintf(data->multi_tx_name, sizeof(data->multi_tx_name), "%s",
+             data->sigs[data->selected_index].name);
     data->multi_tx_total = (int)count;
     data->multi_tx_remaining = (int)count;
     data->multi_tx_active = true;
+
+    if (settings_get_use_cc1101_cap()) {
+        int sent = 0;
+        for (int i = 0; i < (int)count; i++) {
+            if (subghz_cap_tx_sd(data->multi_tx_idx,
+                                 data->multi_tx_name[0] ? data->multi_tx_name : NULL) != ESP_OK) {
+                break;
+            }
+            sent++;
+        }
+        data->multi_tx_active = false;
+        data->multi_tx_remaining = 0;
+        if (sent == 0) {
+            set_status(data, "TX failed", RGB565(255, 80, 80));
+        } else {
+            char status[STATUS_BUF_LEN];
+            snprintf(status, sizeof(status), "Sent %dx #%d", sent, data->multi_tx_idx);
+            set_status(data, status, UI_COLOR_HIGHLIGHT);
+        }
+        data->view = SD_VIEW_LIST;
+        screen_manager_pop();
+        return;
+    }
 
     char cmd[32];
     snprintf(cmd, sizeof(cmd), "subghz_tx %d sd", data->multi_tx_idx);

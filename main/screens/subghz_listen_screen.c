@@ -30,9 +30,12 @@
 #include "subghz_listen_settings_screen.h"
 #include "subghz_parser.h"
 #include "subghz_rf_settings.h"
+#include "subghz_cap_radio.h"
 #include "uart_handler.h"
+#include "settings.h"
 #include "text_ui.h"
 #include "esp_log.h"
+#include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
@@ -110,6 +113,9 @@ typedef struct {
 
 /* Active screen reference for UART line callback (line_callback is global). */
 static subghz_listen_data_t *s_current = NULL;
+
+static void show_toast(subghz_listen_data_t *data, const char *fmt, ...)
+                       __attribute__((format(printf, 2, 3)));
 
 /* Optional pre-fill from Scanner. The autostart flag is no longer consulted —
  * Listen always starts on entry — but the field is kept so the public API
@@ -194,6 +200,15 @@ static void uart_line_cb(const char *line, void *user_data)
 {
     subghz_listen_data_t *data = (subghz_listen_data_t *)user_data;
     if (!data) return;
+
+    if (strstr(line, "[SUBGHZ_EXT_ERR]") && strstr(line, "license")) {
+        show_toast(data, "No SubGHz license");
+        data->status_dirty = true;
+        return;
+    }
+    if (strstr(line, "[SUBGHZ_EXT_")) {
+        return;
+    }
 
     int rssi_ignored;
     if (subghz_parse_rssi_line(line, &rssi_ignored)) return;
@@ -518,25 +533,39 @@ static void start_rx(screen_t *self)
     subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
     if (data->running) return;
 
-    uart_send_command("subghz_stop");
+    if (settings_get_use_cc1101_cap()) {
+        subghz_cap_listen_stop();
+    } else {
+        uart_send_command("subghz_stop");
+    }
 
     char cmd[48];
     snprintf(cmd, sizeof(cmd), "subghz_freq %.2f", data->freq_mhz);
-    uart_send_command(cmd);
+    if (!settings_get_use_cc1101_cap()) {
+        uart_send_command(cmd);
+    }
 
     data->running = true;
     uart_register_line_callback(uart_line_cb, data);
 
-    /* Apply user-configured RSSI noise gate so weak / strict captures match
-     * what's set in Listen Settings (same payload as coreS3). */
     subghz_rf_settings_t cfg;
     subghz_rf_settings_load(&cfg);
-    if (data->raw_mode) {
+    if (settings_get_use_cc1101_cap()) {
+        esp_err_t err = subghz_cap_listen_start(data->freq_mhz, data->raw_mode,
+                                                (int)cfg.listen_rssi_dbm);
+        if (err != ESP_OK) {
+            data->running = false;
+            uart_clear_line_callback();
+            ESP_LOGE(TAG, "Cap listen start failed: %s", esp_err_to_name(err));
+            return;
+        }
+    } else if (data->raw_mode) {
         snprintf(cmd, sizeof(cmd), "subghz_rx raw rssi=%d", (int)cfg.listen_rssi_dbm);
+        uart_send_command(cmd);
     } else {
         snprintf(cmd, sizeof(cmd), "subghz_rx rssi=%d", (int)cfg.listen_rssi_dbm);
+        uart_send_command(cmd);
     }
-    uart_send_command(cmd);
 
     ESP_LOGI(TAG, "Listen started (%.2f MHz, raw=%d, rssi=%d)",
              data->freq_mhz, data->raw_mode, (int)cfg.listen_rssi_dbm);
@@ -551,7 +580,11 @@ static void stop_rx(screen_t *self)
     subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
     if (!data->running) return;
 
-    uart_send_command("subghz_stop");
+    if (settings_get_use_cc1101_cap()) {
+        subghz_cap_listen_stop();
+    } else {
+        uart_send_command("subghz_stop");
+    }
     uart_clear_line_callback();
     data->running = false;
     ESP_LOGI(TAG, "Listen stopped");
@@ -592,6 +625,16 @@ static void perform_save_to_sd(screen_t *self)
     if (data->selected_index >= data->sig_count) return;
     int mem_idx = data->sigs[data->selected_index].idx;
 
+    if (settings_get_use_cc1101_cap()) {
+        if (subghz_cap_save(mem_idx) == ESP_OK) {
+            show_toast(data, "Saved #%d to SD", mem_idx);
+        } else {
+            show_toast(data, "Save failed");
+        }
+        leave_menu_resume_capture(self);
+        return;
+    }
+
     char cmd[32];
     snprintf(cmd, sizeof(cmd), "subghz_save %d", mem_idx);
     uart_send_command(cmd);
@@ -606,6 +649,16 @@ static void perform_transmit_mem(screen_t *self)
     subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
     if (data->selected_index >= data->sig_count) return;
     int mem_idx = data->sigs[data->selected_index].idx;
+
+    if (settings_get_use_cc1101_cap()) {
+        if (subghz_cap_tx_capture(mem_idx) == ESP_OK) {
+            show_toast(data, "Sent #%d", mem_idx);
+        } else {
+            show_toast(data, "TX failed");
+        }
+        leave_menu_resume_capture(self);
+        return;
+    }
 
     char cmd[32];
     snprintf(cmd, sizeof(cmd), "subghz_tx %d mem", mem_idx);
@@ -622,7 +675,11 @@ static void on_freq_picked(float freq, void *user_data)
     if (!s_current) return;
     bool was_running = s_current->running;
     if (was_running) {
-        uart_send_command("subghz_stop");
+        if (settings_get_use_cc1101_cap()) {
+            subghz_cap_listen_stop();
+        } else {
+            uart_send_command("subghz_stop");
+        }
         uart_clear_line_callback();
         s_current->running = false;
     }
@@ -735,9 +792,7 @@ static void on_key_list(screen_t *self, key_code_t key)
                 draw_leave_confirm_view(self);
             } else {
                 if (data->running) {
-                    uart_send_command("subghz_stop");
-                    uart_clear_line_callback();
-                    data->running = false;
+                    stop_rx(self);
                 }
                 screen_manager_pop();
             }
@@ -808,9 +863,7 @@ static void on_key_leave_confirm(screen_t *self, key_code_t key)
         case KEY_SPACE:
             if (data->confirm_choice == 1) {
                 if (data->running) {
-                    uart_send_command("subghz_stop");
-                    uart_clear_line_callback();
-                    data->running = false;
+                    stop_rx(self);
                 }
                 screen_manager_pop();
             } else {
@@ -847,7 +900,11 @@ static void on_destroy(screen_t *self)
     subghz_listen_data_t *data = (subghz_listen_data_t *)self->user_data;
     if (data) {
         if (data->running) {
-            uart_send_command("subghz_stop");
+            if (settings_get_use_cc1101_cap()) {
+                subghz_cap_listen_stop();
+            } else {
+                uart_send_command("subghz_stop");
+            }
             uart_clear_line_callback();
             data->running = false;
         }

@@ -168,6 +168,21 @@ bool uart_check_subghz_available(int timeout_ms);
  */
 bool uart_is_subghz_available(void);
 
+/**
+ * Dispatch a synthetic UART line to the current line + monitor callbacks
+ * (same path as a real RX line, without logging).
+ */
+void uart_dispatch_line(const char *line);
+
+/**
+ * Collect UART lines until one contains end_tag (or timeout).
+ * Arm with uart_collect_begin() BEFORE sending commands, then uart_collect_wait().
+ * Must not be called from the UART RX task.
+ */
+typedef void (*uart_collect_cb_t)(const char *line, void *user_data);
+esp_err_t uart_collect_begin(const char *end_tag, uart_collect_cb_t cb, void *user_data);
+esp_err_t uart_collect_wait(int timeout_ms);
+
 #endif // UART_HANDLER_H
 
 

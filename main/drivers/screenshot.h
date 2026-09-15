@@ -28,6 +28,16 @@ esp_err_t screenshot_take(void);
  */
 bool screenshot_is_available(void);
 
+/**
+ * Ensure SPI3 is initialized for the shared SD + CC1101 Cap bus.
+ * Safe to call more than once. Holds the SX1262 in reset on GPIO5.
+ */
+esp_err_t screenshot_ensure_spi_bus(void);
+
+/** Nested-safe SPI3 lock for SD vs CC1101. */
+void screenshot_spi_acquire(void);
+void screenshot_spi_release(void);
+
 #endif // SCREENSHOT_H
 
 

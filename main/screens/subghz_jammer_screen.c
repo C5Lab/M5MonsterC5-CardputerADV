@@ -10,6 +10,8 @@
 #include "subghz_jammer_screen.h"
 #include "subghz_freq_picker_screen.h"
 #include "uart_handler.h"
+#include "settings.h"
+#include "subghz_cap_radio.h"
 #include "text_ui.h"
 #include "esp_log.h"
 #include <string.h>
@@ -54,15 +56,28 @@ static void draw_screen(screen_t *self)
     ui_draw_status("ENTER:Start/Stop F:Freq ESC:Back");
 }
 
+static void halt_jammer(void)
+{
+    if (settings_get_use_cc1101_cap()) {
+        subghz_cap_jam_stop();
+    } else {
+        uart_send_command("subghz_stop");
+    }
+}
+
 static void start_jamming(screen_t *self)
 {
     subghz_jammer_data_t *data = (subghz_jammer_data_t *)self->user_data;
     if (data->jamming) return;
 
-    char cmd[32];
-    snprintf(cmd, sizeof(cmd), "subghz_freq %.2f", data->freq_mhz);
-    uart_send_command(cmd);
-    uart_send_command("subghz_jam");
+    if (settings_get_use_cc1101_cap()) {
+        subghz_cap_jam_start(data->freq_mhz);
+    } else {
+        char cmd[32];
+        snprintf(cmd, sizeof(cmd), "subghz_freq %.2f", data->freq_mhz);
+        uart_send_command(cmd);
+        uart_send_command("subghz_jam");
+    }
 
     data->jamming = true;
     ESP_LOGI(TAG, "Jammer started on %.2f MHz", data->freq_mhz);
@@ -74,7 +89,7 @@ static void stop_jamming(screen_t *self)
     subghz_jammer_data_t *data = (subghz_jammer_data_t *)self->user_data;
     if (!data->jamming) return;
 
-    uart_send_command("subghz_stop");
+    halt_jammer();
     data->jamming = false;
     ESP_LOGI(TAG, "Jammer stopped");
     draw_screen(self);
@@ -87,7 +102,7 @@ static void on_freq_picked(float freq, void *user_data)
 
     if (s_current_data->jamming) {
         /* Switching frequency mid-stream: stop and restart on the new freq. */
-        uart_send_command("subghz_stop");
+        halt_jammer();
         s_current_data->jamming = false;
     }
     s_current_data->freq_mhz = freq;
@@ -122,7 +137,7 @@ static void on_key(screen_t *self, key_code_t key)
         case KEY_Q:
         case KEY_BACKSPACE:
             if (data->jamming) {
-                uart_send_command("subghz_stop");
+                halt_jammer();
                 data->jamming = false;
             }
             screen_manager_pop();
@@ -138,7 +153,7 @@ static void on_destroy(screen_t *self)
     subghz_jammer_data_t *data = (subghz_jammer_data_t *)self->user_data;
     if (data) {
         if (data->jamming) {
-            uart_send_command("subghz_stop");
+            halt_jammer();
             data->jamming = false;
         }
         if (s_current_data == data) s_current_data = NULL;

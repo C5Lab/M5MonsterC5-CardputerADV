@@ -18,6 +18,7 @@ static const char *TAG = "SETTINGS";
 #define NVS_KEY_SCR_TIMEOUT "scr_tmout"
 #define NVS_KEY_SCR_BRIGHT  "scr_bright"
 #define NVS_KEY_SOUND       "sound"
+#define NVS_KEY_CC1101_CAP  "cc1101_cap"
 #define NVS_KEY_GPS_TYPE    "gps_type"
 
 // Cached values
@@ -27,6 +28,7 @@ static bool red_team_enabled = false;  // Default: disabled
 static uint32_t screen_timeout_ms = DEFAULT_SCREEN_TIMEOUT_MS;
 static uint8_t screen_brightness = DEFAULT_SCREEN_BRIGHTNESS;
 static bool sound_enabled = DEFAULT_SOUND_ENABLED;
+static bool use_cc1101_cap = false;  // Default: Monster drives CC1101
 static gps_type_t gps_type = GPS_TYPE_ATGM;  // Default: ATGM
 
 // Reserved GPIO pins that should not be used (ESP32-S3 specific)
@@ -133,6 +135,12 @@ esp_err_t settings_init(void)
             ESP_LOGI(TAG, "Loaded sound enabled: %s", sound_enabled ? "true" : "false");
         }
         
+        uint8_t cc1101_cap_val = 0;
+        if (nvs_get_u8(handle, NVS_KEY_CC1101_CAP, &cc1101_cap_val) == ESP_OK) {
+            use_cc1101_cap = (cc1101_cap_val != 0);
+            ESP_LOGI(TAG, "Loaded Use CC1101 Cap: %s", use_cc1101_cap ? "true" : "false");
+        }
+
         uint8_t gps_val = 0;
         if (nvs_get_u8(handle, NVS_KEY_GPS_TYPE, &gps_val) == ESP_OK) {
             // Migration: old GPS_TYPE_EXTERNAL(2) removed, old GPS_TYPE_CAP(3) -> new GPS_TYPE_CAP(2)
@@ -366,6 +374,41 @@ esp_err_t settings_set_sound_enabled(bool enabled)
     sound_enabled = enabled;
 
     ESP_LOGI(TAG, "Sound setting saved: %s", enabled ? "enabled" : "disabled");
+    return ESP_OK;
+}
+
+bool settings_get_use_cc1101_cap(void)
+{
+    return use_cc1101_cap;
+}
+
+esp_err_t settings_set_use_cc1101_cap(bool enabled)
+{
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS for writing: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = nvs_set_u8(handle, NVS_KEY_CC1101_CAP, enabled ? 1 : 0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write CC1101 Cap setting: %s", esp_err_to_name(ret));
+        nvs_close(handle);
+        return ret;
+    }
+
+    ret = nvs_commit(handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to commit NVS: %s", esp_err_to_name(ret));
+        nvs_close(handle);
+        return ret;
+    }
+
+    nvs_close(handle);
+    use_cc1101_cap = enabled;
+
+    ESP_LOGI(TAG, "Use CC1101 Cap saved: %s", enabled ? "enabled" : "disabled");
     return ESP_OK;
 }
 

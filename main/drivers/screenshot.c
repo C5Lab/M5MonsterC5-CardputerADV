@@ -14,6 +14,9 @@
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
 #include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include <string.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -25,14 +28,24 @@ static const char *TAG = "SCREENSHOT";
 #define SD_PIN_MOSI     14
 #define SD_PIN_CLK      40
 #define SD_PIN_CS       12
+#define SD_SPI_HOST     SPI3_HOST
 
 // Cap LoRa-1262 SX1262 shares GPIO14 (NSS) and GPIO39 (MISO) with the SD SPI bus.
 // Hold SX1262 in hardware reset and NSS high before SD init so it never drives MISO.
 #define LORA_CAP_RESET_PIN  5   // Active low — LOW = chip in reset
 #define LORA_CAP_NSS_PIN    14  // Same as SD MOSI; keep HIGH so SX1262 stays deselected
 
-static void lora_cap_hold_reset(void)
+static SemaphoreHandle_t s_spi_mutex;
+static TaskHandle_t s_spi_lock_task;
+static int s_spi_lock_depth;
+static bool s_spi_bus_ready;
+static bool s_lora_reset_held;
+
+static void lora_cap_hold_reset_pre_spi(void)
 {
+    if (s_lora_reset_held) {
+        return;
+    }
     gpio_config_t io = {
         .pin_bit_mask = (1ULL << LORA_CAP_RESET_PIN) | (1ULL << LORA_CAP_NSS_PIN),
         .mode         = GPIO_MODE_OUTPUT,
@@ -42,15 +55,86 @@ static void lora_cap_hold_reset(void)
     };
     gpio_config(&io);
     gpio_set_level(LORA_CAP_RESET_PIN, 0); // hold SX1262 in reset
-    gpio_set_level(LORA_CAP_NSS_PIN, 1);   // NSS high = deselected
+    gpio_set_level(LORA_CAP_NSS_PIN, 1);   // NSS high until SPI owns MOSI
+    s_lora_reset_held = true;
+}
+
+static void ensure_spi_mutex(void)
+{
+    if (!s_spi_mutex) {
+        s_spi_mutex = xSemaphoreCreateMutex();
+    }
+}
+
+void screenshot_spi_acquire(void)
+{
+    ensure_spi_mutex();
+    if (!s_spi_mutex) {
+        return;
+    }
+    TaskHandle_t self = xTaskGetCurrentTaskHandle();
+    if (s_spi_lock_task == self) {
+        s_spi_lock_depth++;
+        return;
+    }
+    xSemaphoreTake(s_spi_mutex, portMAX_DELAY);
+    s_spi_lock_task = self;
+    s_spi_lock_depth = 1;
+}
+
+void screenshot_spi_release(void)
+{
+    if (!s_spi_mutex) {
+        return;
+    }
+    if (s_spi_lock_task != xTaskGetCurrentTaskHandle()) {
+        return;
+    }
+    if (--s_spi_lock_depth > 0) {
+        return;
+    }
+    s_spi_lock_task = NULL;
+    xSemaphoreGive(s_spi_mutex);
+}
+
+esp_err_t screenshot_ensure_spi_bus(void)
+{
+    ensure_spi_mutex();
+    if (s_spi_bus_ready) {
+        return ESP_OK;
+    }
+
+    lora_cap_hold_reset_pre_spi();
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    spi_bus_config_t bus_cfg = {
+        .mosi_io_num = SD_PIN_MOSI,
+        .miso_io_num = SD_PIN_MISO,
+        .sclk_io_num = SD_PIN_CLK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 4096,
+    };
+
+    esp_err_t ret = spi_bus_initialize(SD_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* GPIO14 is now MOSI — keep SX1262 in reset via GPIO5 only. */
+    gpio_set_direction(LORA_CAP_RESET_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(LORA_CAP_RESET_PIN, 0);
+
+    s_spi_bus_ready = true;
+    ESP_LOGI(TAG, "SPI3 ready for SD + CC1101 Cap (MOSI=%d MISO=%d CLK=%d)",
+             SD_PIN_MOSI, SD_PIN_MISO, SD_PIN_CLK);
+    return ESP_OK;
 }
 
 // SD card mount point
 #define MOUNT_POINT     "/sdcard"
 #define SCREENS_DIR     MOUNT_POINT "/screens"
-
-// Use SPI3_HOST (VSPI) for SD card - SPI2 is used by display
-#define SD_SPI_HOST     SPI3_HOST
 
 // State
 static bool sd_mounted = false;
@@ -118,24 +202,10 @@ esp_err_t screenshot_init(void)
     // Cap LoRa-1262: SX1262 shares GPIO14 (its NSS) with SD MOSI and GPIO39 (MISO).
     // Assert hardware reset so SX1262 never drives MISO during SD operations.
     // Then wait for the SPI lines to settle (LoRa CAP cable adds capacitance).
-    lora_cap_hold_reset();
-    ESP_LOGI(TAG, "LoRa CAP SX1262 held in reset (GPIO%d=0, GPIO%d=1)",
-             LORA_CAP_RESET_PIN, LORA_CAP_NSS_PIN);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    ESP_LOGI(TAG, "LoRa CAP SX1262 held in reset (GPIO%d)", LORA_CAP_RESET_PIN);
 
-    // Initialize SPI bus for SD card
-    spi_bus_config_t bus_cfg = {
-        .mosi_io_num = SD_PIN_MOSI,
-        .miso_io_num = SD_PIN_MISO,
-        .sclk_io_num = SD_PIN_CLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4000,
-    };
-    
-    esp_err_t ret = spi_bus_initialize(SD_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
+    esp_err_t ret = screenshot_ensure_spi_bus();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
         return ret;
     }
     
@@ -168,7 +238,7 @@ esp_err_t screenshot_init(void)
     }
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to initialize SD card: %s", esp_err_to_name(ret));
-        spi_bus_free(SD_SPI_HOST);
+        /* Leave SPI3 up — CC1101 Cap may already own the bus. */
         return ret;
     }
     
@@ -218,6 +288,7 @@ esp_err_t screenshot_take(void)
     }
     
     ESP_LOGI(TAG, "Taking screenshot #%d...", screenshot_counter);
+    screenshot_spi_acquire();
     
     // Generate filename
     char filename[64];
@@ -227,6 +298,7 @@ esp_err_t screenshot_take(void)
     FILE *f = fopen(filename, "wb");
     if (f == NULL) {
         ESP_LOGE(TAG, "Failed to open file for writing: %s", filename);
+        screenshot_spi_release();
         return ESP_FAIL;
     }
     
@@ -273,6 +345,7 @@ esp_err_t screenshot_take(void)
     if (row_buffer == NULL) {
         ESP_LOGE(TAG, "Failed to allocate row buffer");
         fclose(f);
+        screenshot_spi_release();
         return ESP_ERR_NO_MEM;
     }
     
@@ -298,6 +371,7 @@ esp_err_t screenshot_take(void)
     
     ESP_LOGI(TAG, "Screenshot saved: %s", filename);
     screenshot_counter++;
+    screenshot_spi_release();
     
     return ESP_OK;
 }

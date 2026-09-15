@@ -22,6 +22,8 @@
 #include "uart_handler.h"
 #include "keyboard.h"
 #include "text_ui.h"
+#include "settings.h"
+#include "cc1101_cap.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -195,6 +197,17 @@ static void send_apply(subghz_settings_data_t *data)
     char *space = strchr(val, ' ');
     if (space) *space = '\0';
 
+    if (settings_get_use_cc1101_cap()) {
+        float v = (float)data->value_cc / 100.0f;
+        if (cc1101_cap_set_freq_correction(v) == ESP_OK) {
+            show_toast(data, "Saved %s MHz", val);
+        } else {
+            show_toast(data, "Save failed");
+        }
+        draw_toast_row(data);
+        return;
+    }
+
     char cmd[64];
     snprintf(cmd, sizeof(cmd), "subghz_set_freq_correction %s", val);
     uart_send_command(cmd);
@@ -342,10 +355,17 @@ screen_t* subghz_settings_screen_create(void *params)
 
     draw_screen(screen);
 
-    /* Ask firmware for the current correction value. The reply comes in on
-     * uart_line_cb and is consumed in on_tick. */
-    uart_register_line_callback(uart_line_cb, data);
-    uart_send_command("subghz_get_freq_correction");
+    if (settings_get_use_cc1101_cap()) {
+        float mhz = cc1101_cap_get_freq_correction();
+        data->value_cc = (int)(mhz * 100.0f + (mhz >= 0 ? 0.5f : -0.5f));
+        if (data->value_cc < VALUE_MIN_CC) data->value_cc = VALUE_MIN_CC;
+        if (data->value_cc > VALUE_MAX_CC) data->value_cc = VALUE_MAX_CC;
+        data->value_loaded = true;
+        draw_value_row(data, data->selected == MENU_VALUE);
+    } else {
+        uart_register_line_callback(uart_line_cb, data);
+        uart_send_command("subghz_get_freq_correction");
+    }
 
     ESP_LOGI(TAG, "Sub-GHz settings screen created");
     return screen;

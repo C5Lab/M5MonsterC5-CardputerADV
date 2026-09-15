@@ -7,6 +7,8 @@
 
 #include "subghz_tesla_screen.h"
 #include "uart_handler.h"
+#include "settings.h"
+#include "subghz_cap_radio.h"
 #include "text_ui.h"
 #include "esp_log.h"
 #include <stdlib.h>
@@ -46,8 +48,12 @@ static void send_tesla(screen_t *self)
 {
     subghz_tesla_data_t *data = (subghz_tesla_data_t *)self->user_data;
     /* Identical sequence to coreS3 subghz_tesla_screen.c */
-    uart_send_command("subghz_freq 315.00");
-    uart_send_command("subghz_tx tesla");
+    if (settings_get_use_cc1101_cap()) {
+        subghz_cap_tx_tesla();
+    } else {
+        uart_send_command("subghz_freq 315.00");
+        uart_send_command("subghz_tx tesla");
+    }
     data->send_count++;
     data->last_sent = true;
     ESP_LOGI(TAG, "Tesla charge port signal sent (315 MHz), count=%d", data->send_count);
