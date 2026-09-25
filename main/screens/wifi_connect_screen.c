@@ -441,7 +441,7 @@ static void on_tick(screen_t *self)
     if (data->needs_push_ssid_input) {
         data->needs_push_ssid_input = false;
         
-        text_input_params_t *input_params = malloc(sizeof(text_input_params_t));
+        text_input_params_t *input_params = calloc(1, sizeof(text_input_params_t));
         if (input_params) {
             input_params->title = "Enter SSID";
             input_params->hint = "Network name";

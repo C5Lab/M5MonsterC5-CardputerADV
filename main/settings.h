@@ -19,6 +19,13 @@
 #define DEFAULT_SCREEN_BRIGHTNESS   100     // 100%
 #define DEFAULT_SOUND_ENABLED       true
 
+// JanOS NFC transport modes (values match the NFC settings UI order)
+typedef enum {
+    NFC_BUS_MODE_SPI = 0,
+    NFC_BUS_MODE_I2C = 1,
+    NFC_BUS_MODE_PN532 = 2,
+} nfc_bus_mode_t;
+
 // Valid GPIO pin range for ESP32-S3
 #define MIN_GPIO_PIN            0
 #define MAX_GPIO_PIN            48
@@ -127,6 +134,16 @@ gps_type_t settings_get_gps_type(void);
  * @return ESP_OK on success
  */
 esp_err_t settings_set_gps_type(gps_type_t type);
+
+/**
+ * @brief Get the last NFC bus mode reported/applied through the UI
+ */
+nfc_bus_mode_t settings_get_nfc_bus_mode(void);
+
+/**
+ * @brief Persist the NFC bus mode shown by the UI
+ */
+esp_err_t settings_set_nfc_bus_mode(nfc_bus_mode_t mode);
 
 /**
  * @brief Get top-bar battery display mode

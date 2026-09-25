@@ -12,6 +12,7 @@
 #include "compromised_menu_screen.h"
 #include "network_attacks_screen.h"
 #include "subghz_menu_screen.h"
+#include "nfc_menu_screen.h"
 #include "mesh_recon_screen.h"
 #include "wardrive_menu_screen.h"
 #include "settings_screen.h"
@@ -32,26 +33,27 @@ typedef struct {
     screen_create_fn create_fn;
     const char *placeholder_title;
     bool        subghz_only;    // If true, only shown when subghz module probe succeeded
+    bool        nfc_only;       // If true, only shown when NFC probe succeeded
 } menu_item_t;
 
 // All possible menu candidates, in display order. The first page (6 items)
 // holds the primary tools; Mesh Recon and Compromised data live on page 2.
-// Sub-GHz is only included when uart_is_subghz_available() returns true
-// (probed once at boot).
+// Optional hardware domains are included only after their boot probes succeed.
 static const menu_item_t all_menu_items[] = {
     // --- Page 1 ---
-    {"WiFi Scan & Attack", "WiFi Scan & Test", wifi_scan_screen_create, NULL, false},
-    {"Global WiFi Attacks", "Global WiFi Tests", global_attacks_screen_create, NULL, false},
-    {"Network Tools", "Network Tools", network_attacks_screen_create, NULL, false},
-    {"Wardrive", "Wardrive", wardrive_menu_screen_create, NULL, false},
-    {"WiFi Sniff&Karma", "WiFi Sniff&Karma", sniff_karma_menu_screen_create, NULL, false},
-    {"Deauth Detector", "Deauth Detector", deauth_detector_screen_create, NULL, false},
+    {"WiFi Scan & Attack", "WiFi Scan & Test", wifi_scan_screen_create, NULL, false, false},
+    {"Global WiFi Attacks", "Global WiFi Tests", global_attacks_screen_create, NULL, false, false},
+    {"Network Tools", "Network Tools", network_attacks_screen_create, NULL, false, false},
+    {"Wardrive", "Wardrive", wardrive_menu_screen_create, NULL, false, false},
+    {"WiFi Sniff&Karma", "WiFi Sniff&Karma", sniff_karma_menu_screen_create, NULL, false, false},
+    {"Deauth Detector", "Deauth Detector", deauth_detector_screen_create, NULL, false, false},
     // --- Page 2 ---
-    {"Mesh Recon", "Mesh Recon", mesh_recon_screen_create, NULL, false},
-    {"Compromised data", "Compromised data", compromised_menu_screen_create, NULL, false},
-    {"Bluetooth", "Bluetooth", bt_menu_screen_create, NULL, false},
-    {"Sub-GHz", "Sub-GHz", subghz_menu_screen_create, NULL, true},
-    {"Settings", "Settings", settings_screen_create, NULL, false},
+    {"Mesh Recon", "Mesh Recon", mesh_recon_screen_create, NULL, false, false},
+    {"Compromised data", "Compromised data", compromised_menu_screen_create, NULL, false, false},
+    {"Bluetooth", "Bluetooth", bt_menu_screen_create, NULL, false, false},
+    {"NFC", "NFC", nfc_menu_screen_create, NULL, false, true},
+    {"Sub-GHz", "Sub-GHz", subghz_menu_screen_create, NULL, true, false},
+    {"Settings", "Settings", settings_screen_create, NULL, false, false},
 };
 
 #define ALL_MENU_COUNT (sizeof(all_menu_items) / sizeof(all_menu_items[0]))
@@ -71,6 +73,9 @@ static void rebuild_visible(home_screen_data_t *data)
     data->visible_count = 0;
     for (int i = 0; i < (int)ALL_MENU_COUNT; i++) {
         if (all_menu_items[i].subghz_only && !uart_is_subghz_available()) {
+            continue;
+        }
+        if (all_menu_items[i].nfc_only && !uart_is_nfc_available()) {
             continue;
         }
         data->visible[data->visible_count++] = i;

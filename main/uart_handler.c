@@ -25,6 +25,7 @@ static TaskHandle_t uart_task_handle = NULL;
 // Line callback
 static uart_response_callback_t line_callback = NULL;
 static void *line_callback_user_data = NULL;
+static volatile unsigned line_callback_in_flight = 0;
 // Monitor callback (always active)
 static uart_response_callback_t monitor_callback = NULL;
 static void *monitor_callback_user_data = NULL;
@@ -52,6 +53,14 @@ static volatile bool pong_received = false;
 // Sub-GHz availability detection state
 static volatile bool subghz_status_seen = false;
 static bool          subghz_available_cached = false;
+
+// NFC availability detection state
+static volatile bool nfc_probe_done = false;
+static volatile bool nfc_probe_detected = false;
+static bool          nfc_available_cached = false;
+static bool          nfc_transport_synced = true;
+static volatile bool nfc_sync_bus_seen = false;
+static volatile bool nfc_sync_done = false;
 
 // Line buffer
 static char line_buffer[1024];
@@ -156,9 +165,20 @@ static void process_line(const char *line)
         monitor_callback(line, monitor_callback_user_data);
     }
 
-    // Call line callback if registered
-    if (line_callback) {
-        line_callback(line, line_callback_user_data);
+    // Snapshot the callback and keep its user_data alive as one dispatch unit.
+    uart_response_callback_t callback = NULL;
+    void *callback_user_data = NULL;
+    xSemaphoreTake(uart_mutex, portMAX_DELAY);
+    callback = line_callback;
+    callback_user_data = line_callback_user_data;
+    if (callback) line_callback_in_flight++;
+    xSemaphoreGive(uart_mutex);
+
+    if (callback) {
+        callback(line, callback_user_data);
+        xSemaphoreTake(uart_mutex, portMAX_DELAY);
+        line_callback_in_flight--;
+        xSemaphoreGive(uart_mutex);
     }
 
     // Handle scan mode
@@ -331,6 +351,24 @@ esp_err_t uart_send_sensitive_command(const char *cmd)
 
 void uart_register_line_callback(uart_response_callback_t callback, void *user_data)
 {
+    bool from_uart_task = uart_task_handle &&
+                          xTaskGetCurrentTaskHandle() == uart_task_handle;
+
+    // Detach first. A screen running on the UI task must not free callback
+    // user_data until a dispatch already in progress has returned.
+    if (!from_uart_task) {
+        bool dispatch_pending;
+        do {
+            xSemaphoreTake(uart_mutex, portMAX_DELAY);
+            line_callback = NULL;
+            line_callback_user_data = NULL;
+            dispatch_pending = line_callback_in_flight > 0;
+            xSemaphoreGive(uart_mutex);
+            if (!dispatch_pending) break;
+            vTaskDelay(pdMS_TO_TICKS(1));
+        } while (true);
+    }
+
     xSemaphoreTake(uart_mutex, portMAX_DELAY);
     line_callback = callback;
     line_callback_user_data = user_data;
@@ -347,10 +385,7 @@ void uart_register_monitor_callback(uart_response_callback_t callback, void *use
 
 void uart_clear_line_callback(void)
 {
-    xSemaphoreTake(uart_mutex, portMAX_DELAY);
-    line_callback = NULL;
-    line_callback_user_data = NULL;
-    xSemaphoreGive(uart_mutex);
+    uart_register_line_callback(NULL, NULL);
 }
 
 void uart_clear_monitor_callback(void)
@@ -538,4 +573,104 @@ bool uart_check_subghz_available(int timeout_ms)
 bool uart_is_subghz_available(void)
 {
     return subghz_available_cached;
+}
+
+static void nfc_probe_response_callback(const char *line, void *user_data)
+{
+    (void)user_data;
+    if (!line) return;
+
+    if (strstr(line, "[NFC] not detected") ||
+        strstr(line, "[NFC] not initialized")) {
+        nfc_probe_detected = false;
+    } else if (strstr(line, "[NFC] detected")) {
+        nfc_probe_detected = true;
+    } else if (strcmp(line, "[NFC] END") == 0 ||
+               strcmp(line, "[NFC] END\r") == 0) {
+        nfc_probe_done = true;
+    }
+}
+
+bool uart_check_nfc_available(int timeout_ms)
+{
+    ESP_LOGI(TAG, "Probing NFC controller (init_nfc)...");
+
+    nfc_probe_done = false;
+    nfc_probe_detected = false;
+
+    uart_response_callback_t old_callback = line_callback;
+    void *old_user_data = line_callback_user_data;
+    uart_register_line_callback(nfc_probe_response_callback, NULL);
+    uart_send_command("init_nfc");
+
+    int elapsed = 0;
+    const int check_interval = 10;
+    while (elapsed < timeout_ms && !nfc_probe_done) {
+        vTaskDelay(pdMS_TO_TICKS(check_interval));
+        elapsed += check_interval;
+    }
+
+    uart_register_line_callback(old_callback, old_user_data);
+    nfc_transport_synced = nfc_probe_done;
+    nfc_available_cached = nfc_probe_done && nfc_probe_detected;
+
+    ESP_LOGI(TAG, "NFC controller %s",
+             nfc_available_cached ? "available" : "not detected");
+    return nfc_available_cached;
+}
+
+bool uart_is_nfc_available(void)
+{
+    return nfc_available_cached;
+}
+
+void uart_set_nfc_available(bool available)
+{
+    nfc_available_cached = available;
+}
+
+static void nfc_sync_response_callback(const char *line, void *user_data)
+{
+    (void)user_data;
+    if (!line) return;
+
+    if (strstr(line, "[NFC] bus:")) {
+        nfc_sync_bus_seen = true;
+    } else if (nfc_sync_bus_seen &&
+               (strcmp(line, "[NFC] END") == 0 ||
+                strcmp(line, "[NFC] END\r") == 0)) {
+        nfc_sync_done = true;
+    }
+}
+
+bool uart_resync_nfc(int timeout_ms)
+{
+    nfc_sync_bus_seen = false;
+    nfc_sync_done = false;
+    uart_register_line_callback(nfc_sync_response_callback, NULL);
+    uart_send_command("get_nfc_bus");
+
+    int elapsed = 0;
+    const int check_interval = 10;
+    while (elapsed < timeout_ms && !nfc_sync_done) {
+        vTaskDelay(pdMS_TO_TICKS(check_interval));
+        elapsed += check_interval;
+    }
+    uart_clear_line_callback();
+
+    nfc_transport_synced = nfc_sync_done;
+    if (!nfc_sync_done) {
+        ESP_LOGW(TAG, "NFC UART resynchronization timed out");
+    }
+    return nfc_sync_done;
+}
+
+bool uart_is_nfc_transport_synced(void)
+{
+    return nfc_transport_synced;
+}
+
+void uart_set_nfc_transport_synced(bool synced)
+{
+    nfc_transport_synced = synced;
 }

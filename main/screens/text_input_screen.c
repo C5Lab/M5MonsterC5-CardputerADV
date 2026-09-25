@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 static const char *TAG = "TEXT_INPUT";
 
@@ -234,8 +235,14 @@ screen_t* text_input_screen_create(void *params)
         data->max_length = TEXT_INPUT_MAX_LEN;
     }
     data->masked = input_params->masked;
-    data->cursor_pos = 0;
-    data->input[0] = '\0';
+    if (input_params->initial_text) {
+        snprintf(data->input, sizeof(data->input), "%.*s",
+                 (int)data->max_length, input_params->initial_text);
+        data->cursor_pos = (int)strlen(data->input);
+    } else {
+        data->cursor_pos = 0;
+        data->input[0] = '\0';
+    }
     
     free(input_params);
     
