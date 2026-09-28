@@ -221,7 +221,15 @@ static void cycle_timeout(int direction)
 static void adjust_brightness(int delta)
 {
     int current = (int)settings_get_screen_brightness();
-    current += delta;
+    // Snap coarse steps to tens, including when leaving the 1% minimum.
+    // Shift's single-percent steps remain relative to the current value.
+    if (delta == 10) {
+        current = (current / 10 + 1) * 10;
+    } else if (delta == -10) {
+        current = ((current - 1) / 10) * 10;
+    } else {
+        current += delta;
+    }
     if (current < 1) current = 1;
     if (current > 100) current = 100;
     settings_set_screen_brightness((uint8_t)current);
