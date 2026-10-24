@@ -19,14 +19,23 @@ static const char *TAG = "DISPLAY";
 #define BL_LEDC_TIMER       LEDC_TIMER_0
 #define BL_LEDC_MODE        LEDC_LOW_SPEED_MODE
 #define BL_LEDC_CHANNEL     LEDC_CHANNEL_0
+#if defined(BOARD_K132)
+// Match M5GFX's Cardputer backlight frequency; validate dimming on K132 hardware.
+#define BL_LEDC_FREQ_HZ     256
+#else
 #define BL_LEDC_FREQ_HZ     5000
+#endif
 #define BL_LEDC_RESOLUTION  LEDC_TIMER_13_BIT  // 0-8191 duty (13-bit for fine control)
 
-// Cardputer backlight needs high PWM duty to produce visible light.
-// Below ~88% duty the backlight is essentially off.
-// Map user brightness 1-100% to the visible duty range only.
 #define BL_DUTY_MAX         8191
-#define BL_DUTY_MIN         7200  // ~88% of max - minimum visible on Cardputer
+#if defined(BOARD_K132)
+// At 256 Hz, use a ~6.25% floor based on M5GFX's Cardputer offset of 16/256.
+// The legacy ~88% floor leaves almost no dimming range at this frequency.
+#define BL_DUTY_MIN         512
+#else
+// Preserve the existing ADV mapping at 5 kHz.
+#define BL_DUTY_MIN         7200
+#endif
 
 static esp_lcd_panel_handle_t panel_handle = NULL;
 
@@ -181,7 +190,7 @@ void display_clear(uint16_t color)
 
 void display_set_backlight(uint8_t brightness)
 {
-    // Map 0% to off, 1-100% to the visible duty range (BL_DUTY_MIN..BL_DUTY_MAX)
+    // Map 0% to off, 1-100% to the board's duty range (BL_DUTY_MIN..BL_DUTY_MAX).
     uint32_t duty = 0;
     if (brightness > 0) {
         if (brightness >= 100) {
@@ -190,8 +199,24 @@ void display_set_backlight(uint8_t brightness)
             duty = BL_DUTY_MIN + (uint32_t)(brightness - 1) * (BL_DUTY_MAX - BL_DUTY_MIN) / 99;
         }
     }
+#if defined(BOARD_K132)
+    esp_err_t ret = ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "K132 backlight: set duty failed: %s", esp_err_to_name(ret));
+        return;
+    }
+    ret = ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "K132 backlight: update duty failed: %s", esp_err_to_name(ret));
+        return;
+    }
+    ESP_LOGI(TAG, "K132 backlight: brightness=%u%%, requested duty=%lu/%u, PWM=%lu Hz",
+             (unsigned)brightness, (unsigned long)duty, (unsigned)BL_DUTY_MAX,
+             (unsigned long)ledc_get_freq(BL_LEDC_MODE, BL_LEDC_TIMER));
+#else
     ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty);
     ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL);
+#endif
 }
 
 void display_flush(void)
