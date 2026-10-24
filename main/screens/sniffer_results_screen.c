@@ -1,527 +1,308 @@
-/**
- * @file sniffer_results_screen.c
- * @brief Sniffer results screen showing SSIDs and clients with selection
- */
-
+/** Opt-in JanOS client list. UART callbacks only update data; UI owns navigation. */
 #include "sniffer_results_screen.h"
+#include "sniffer_clients_model.h"
 #include "station_deauth_screen.h"
 #include "uart_handler.h"
 #include "text_ui.h"
 #include "buzzer.h"
-#include "esp_log.h"
-#include <string.h>
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include <stdio.h>
 #include <stdlib.h>
-#include <ctype.h>
+#include <string.h>
 
-static const char *TAG = "SNIFF_RES";
+#define VISIBLE 6
+#define START_ROW 1
+#define LINE_COLS 30
+#define START_TIMEOUT_US (15000000LL)
+#define LIST_IDLE_TIMEOUT_US (5000000LL)
+#define LIST_TOTAL_TIMEOUT_US (300000000LL)
 
-// Maximum entries
-#define MAX_LINES       32
-#define MAX_LINE_LEN    32
-#define MAX_SSID_LEN    33
-
-// Screen user data
 typedef struct {
-    char lines[MAX_LINES][MAX_LINE_LEN];
-    char parent_ssid[MAX_LINES][MAX_SSID_LEN];  // Parent SSID for each MAC line
-    char current_ssid[MAX_SSID_LEN];            // Current SSID during parsing
-    int line_count;
-    int selected_index;     // Currently selected line
-    int scroll_offset;
-    bool loading;
-    bool needs_redraw;
-    screen_t *self;
-    // Deauth pending state - waiting for scan results to get network index
-    bool pending_deauth;                        // Whether we're waiting for scan results
-    char deauth_mac[18];                        // MAC address to deauth
-    char deauth_ssid[MAX_SSID_LEN];             // SSID to find in scan results
+    sc_model_t model;
+    SemaphoreHandle_t mutex;
+    unsigned selected, offset, view_count;
+    uint16_t ap_clients[SC_MAX_APS];
+    bool loading, dirty, pending, started;
+    uint8_t pending_ap[6], pending_station[6];
+    char pending_name[33], message[48];
+    int64_t deadline, list_start;
 } sniffer_results_data_t;
 
-// Forward declaration
-static void draw_screen(screen_t *self);
+typedef struct {
+    bool is_ap;
+    unsigned ap, client;
+} view_item_t;
 
-static void draw_result_line(sniffer_results_data_t *data, int line_idx)
+static void print_row(int row, const char *text, uint16_t fg)
 {
-    const int visible_rows = 6;
-    const int start_row = 1;
-    int row_offset = line_idx - data->scroll_offset;
-    if (row_offset < 0 || row_offset >= visible_rows || line_idx >= data->line_count) return;
-
-    const char *line = data->lines[line_idx];
-    bool is_selected = (line_idx == data->selected_index);
-    bool is_mac = (line[0] == ' ');
-    uint16_t color = is_selected ? UI_COLOR_SELECTED :
-                     (is_mac ? UI_COLOR_DIMMED : UI_COLOR_HIGHLIGHT);
-    char display[31];
-    display[0] = is_selected ? '>' : ' ';
-    strncpy(display + 1, line, 29);
-    display[30] = '\0';
-    ui_print(0, start_row + row_offset, display, color);
+    char line[LINE_COLS + 1];
+    snprintf(line, sizeof(line), "%-*.*s", LINE_COLS, LINE_COLS, text ? text : "");
+    ui_print(0, row, line, fg);
 }
-
-static void draw_content(sniffer_results_data_t *data)
+static void rebuild_view(sniffer_results_data_t *d)
 {
-    const int visible_rows = 6;
-    const int start_row = 1;
-
-    for (int i = 0; i < visible_rows; i++) {
-        display_fill_rect(0, (start_row + i) * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+    memset(d->ap_clients, 0, sizeof(d->ap_clients));
+    for(unsigned i = 0; i < d->model.client_count; ++i) {
+        unsigned ap = d->model.clients[i].ap;
+        if(ap < SC_MAX_APS) ++d->ap_clients[ap];
     }
-
-    if (data->loading) {
-        ui_print_center(3, "Loading...", UI_COLOR_DIMMED);
-    } else if (data->line_count == 0) {
-        ui_print_center(3, "No results", UI_COLOR_DIMMED);
-    } else {
-        for (int i = 0; i < visible_rows; i++) {
-            int line_idx = data->scroll_offset + i;
-            if (line_idx < data->line_count) {
-                draw_result_line(data, line_idx);
-            }
-        }
-
-        if (data->scroll_offset > 0) {
-            ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
-        }
-        if (data->scroll_offset + visible_rows < data->line_count) {
-            ui_print(UI_COLS - 2, visible_rows, "v", UI_COLOR_DIMMED);
-        }
-    }
+    d->view_count = d->model.ap_count + d->model.client_count;
 }
-
-/**
- * @brief Check if line is an ESP log line (starts with I/W/E/D followed by space and parenthesis)
- */
-static bool is_esp_log_line(const char *line)
+static bool view_item(const sniffer_results_data_t *d, unsigned view, view_item_t *out)
 {
-    if (strlen(line) < 3) return false;
-    
-    // Check for ESP log format: "I (", "W (", "E (", "D ("
-    if ((line[0] == 'I' || line[0] == 'W' || line[0] == 'E' || line[0] == 'D') 
-        && line[1] == ' ' && line[2] == '(') {
-        return true;
+    unsigned v = 0, client = 0;
+    for(unsigned a = 0; a < d->model.ap_count; ++a) {
+        unsigned n = d->ap_clients[a];
+        if(v == view) { out->is_ap = true; out->ap = a; out->client = 0; return true; }
+        ++v;
+        if(view < v + n) {
+            out->is_ap = false; out->ap = a; out->client = client + (view - v);
+            return true;
+        }
+        v += n;
+        client += n;
     }
-    
-    // Check for other common log patterns
-    if (strstr(line, "[MEM]") != NULL) return true;
-    if (strncmp(line, "show_sniffer", 12) == 0) return true;  // Echo of command
-    
     return false;
 }
-
-/**
- * @brief Check if line looks like a MAC address (may have leading space)
- * Format: " XX:XX:XX:XX:XX:XX" or "XX:XX:XX:XX:XX:XX"
- */
-static bool is_mac_line(const char *line)
+static bool is_client_view(const sniffer_results_data_t *d, unsigned view)
 {
-    const char *p = line;
-    
-    // Skip leading whitespace
-    while (*p == ' ') p++;
-    
-    // Need at least 17 chars for MAC
-    if (strlen(p) < 17) return false;
-    
-    // Check pattern: hex:hex:hex:hex:hex:hex
-    for (int i = 0; i < 17; i++) {
-        if (i == 2 || i == 5 || i == 8 || i == 11 || i == 14) {
-            if (p[i] != ':') return false;
-        } else {
-            if (!isxdigit((unsigned char)p[i])) return false;
-        }
+    view_item_t item;
+    return view_item(d, view, &item) && !item.is_ap;
+}
+static unsigned first_client_view(const sniffer_results_data_t *d)
+{
+    for(unsigned v = 0; v < d->view_count; ++v) if(is_client_view(d, v)) return v;
+    return 0;
+}
+static unsigned next_client_view(const sniffer_results_data_t *d, unsigned from, int dir)
+{
+    if(!d->view_count) return from;
+    unsigned v = from;
+    for(unsigned i = 0; i < d->view_count; ++i) {
+        if(dir > 0) v = (v + 1) % d->view_count;
+        else v = v ? v - 1 : d->view_count - 1;
+        if(is_client_view(d, v)) return v;
     }
-    return true;
+    return from;
 }
-
-/**
- * @brief Check if line is an SSID line (contains ", CH")
- */
-static bool is_ssid_line(const char *line)
+static unsigned client_in_window(const sniffer_results_data_t *d, bool last)
 {
-    return strstr(line, ", CH") != NULL;
-}
-
-/**
- * @brief Check if line indicates no results
- */
-static bool is_no_results_line(const char *line)
-{
-    return strstr(line, "No APs") != NULL || strstr(line, "no clients") != NULL;
-}
-
-/**
- * @brief Extract SSID from SSID line (everything before ", CH")
- */
-static void extract_ssid(const char *line, char *ssid, size_t ssid_len)
-{
-    const char *ch_marker = strstr(line, ", CH");
-    if (ch_marker && ssid_len > 0) {
-        size_t len = ch_marker - line;
-        if (len >= ssid_len) len = ssid_len - 1;
-        strncpy(ssid, line, len);
-        ssid[len] = '\0';
-    } else if (ssid_len > 0) {
-        strncpy(ssid, line, ssid_len - 1);
-        ssid[ssid_len - 1] = '\0';
+    unsigned found = d->selected, end = d->offset + VISIBLE, seen = 0;
+    if(end > d->view_count) end = d->view_count;
+    for(unsigned v = d->offset; v < end; ++v) {
+        if(!is_client_view(d, v)) continue;
+        if(!seen || !last) found = v;
+        else found = v;
+        seen = 1;
+        if(!last && seen) break;
     }
+    if(!seen) return next_client_view(d, d->offset ? d->offset - 1 : 0, 1);
+    return found;
 }
-
-/**
- * @brief Extract MAC address from line (skip leading whitespace)
- */
-static void extract_mac(const char *line, char *mac, size_t mac_len)
+static void finish_snapshot(sniffer_results_data_t *d)
 {
-    const char *p = line;
-    
-    // Skip leading whitespace
-    while (*p == ' ') p++;
-    
-    // Copy MAC (17 chars)
-    if (mac_len > 17) {
-        strncpy(mac, p, 17);
-        mac[17] = '\0';
-    } else if (mac_len > 0) {
-        strncpy(mac, p, mac_len - 1);
-        mac[mac_len - 1] = '\0';
-    }
+    rebuild_view(d);
+    d->offset = 0;
+    d->selected = first_client_view(d);
 }
-
-/**
- * @brief Check if line is a scan result CSV line
- * Format: "1","SSID","","BSSID","CH","Security","RSSI","Band"
- */
-static bool is_scan_result_line(const char *line)
+static void format_ap_line(const sniffer_results_data_t *d, unsigned ap, char *out, size_t size)
 {
-    // Must start with a quote and digit
-    if (line[0] != '"') return false;
-    if (!isdigit((unsigned char)line[1])) return false;
-    return true;
+    const sc_ap_t *a = &d->model.aps[ap];
+    char label[33];
+    sc_ap_label(a, label, sizeof(label));
+    if(a->ssid_len) snprintf(out, size, "%s, CH%u: %u", label, a->channel, d->ap_clients[ap]);
+    else snprintf(out, size, "%s: %u", label, d->ap_clients[ap]);
 }
-
-/**
- * @brief Parse scan result CSV line and extract index and SSID
- * Format: "1","SSID","","BSSID","CH","Security","RSSI","Band"
- * @return network index if successful, -1 on failure
- */
-static int parse_scan_result_line(const char *line, char *ssid_out, size_t ssid_len)
+static void draw_view_row(sniffer_results_data_t *d, unsigned view)
 {
-    if (!is_scan_result_line(line)) return -1;
-    
-    // Parse index (first quoted field)
-    const char *p = line + 1;  // Skip opening quote
-    int index = atoi(p);
-    if (index <= 0) return -1;
-    
-    // Find second quoted field (SSID)
-    // Skip to first comma after index
-    p = strchr(p, ',');
-    if (!p) return -1;
-    p++;  // Skip comma
-    
-    // Skip opening quote of SSID field
-    if (*p != '"') return -1;
-    p++;
-    
-    // Find closing quote of SSID
-    const char *ssid_end = strchr(p, '"');
-    if (!ssid_end) return -1;
-    
-    // Copy SSID
-    size_t len = ssid_end - p;
-    if (len >= ssid_len) len = ssid_len - 1;
-    strncpy(ssid_out, p, len);
-    ssid_out[len] = '\0';
-    
-    return index;
-}
-
-/**
- * @brief Execute deauth sequence after finding network index
- */
-static void execute_deauth_sequence(sniffer_results_data_t *data, int network_index)
-{
-    ESP_LOGI(TAG, "Executing deauth: network=%d, station=%s", network_index, data->deauth_mac);
-    
-    // Send stop first
-    uart_send_command("stop");
-    
-    // Select the network by index
-    char select_net_cmd[32];
-    snprintf(select_net_cmd, sizeof(select_net_cmd), "select_networks %d", network_index);
-    uart_send_command(select_net_cmd);
-    
-    // Select the station
-    char select_sta_cmd[64];
-    snprintf(select_sta_cmd, sizeof(select_sta_cmd), "select_stations %s", data->deauth_mac);
-    uart_send_command(select_sta_cmd);
-    
-    // Start deauth
-    uart_send_command("start_deauth");
-    buzzer_beep_attack();
-    
-    // Create params for station deauth screen
-    station_deauth_params_t *params = calloc(1, sizeof(station_deauth_params_t));
-    if (params) {
-        strncpy(params->mac, data->deauth_mac, sizeof(params->mac) - 1);
-        strncpy(params->ssid, data->deauth_ssid, sizeof(params->ssid) - 1);
-        
-        // Clear pending state before pushing new screen
-        data->pending_deauth = false;
-        
-        // Push deauth screen
-        screen_manager_push(station_deauth_screen_create, params);
+    if(view < d->offset || view >= d->offset + VISIBLE) return;
+    int row = START_ROW + (int)(view - d->offset);
+    if(view >= d->view_count) { print_row(row, "", UI_COLOR_TEXT); return; }
+    view_item_t item;
+    if(!view_item(d, view, &item)) { print_row(row, "", UI_COLOR_TEXT); return; }
+    char text[48];
+    if(item.is_ap) {
+        format_ap_line(d, item.ap, text, sizeof(text));
+        print_row(row, text, UI_COLOR_HIGHLIGHT);
     } else {
-        data->pending_deauth = false;
+        char mac[18];
+        sc_mac_text(mac, d->model.clients[item.client].mac);
+        snprintf(text, sizeof(text), "%c%s", view == d->selected ? '>' : ' ', mac);
+        print_row(row, text, view == d->selected ? UI_COLOR_SELECTED : UI_COLOR_DIMMED);
     }
 }
-
-/**
- * @brief UART line callback for parsing results
- */
-static void uart_line_callback(const char *line, void *user_data)
+static void draw_view_window(sniffer_results_data_t *d)
 {
-    sniffer_results_data_t *data = (sniffer_results_data_t *)user_data;
-    if (!data) return;
-    
-    // Skip empty lines
-    if (strlen(line) == 0) return;
-    
-    // Skip ESP log lines
-    if (is_esp_log_line(line)) return;
-    
-    // If we're waiting for scan results to find network index for deauth
-    if (data->pending_deauth) {
-        // Try to parse as scan result line
-        char parsed_ssid[MAX_SSID_LEN];
-        int network_index = parse_scan_result_line(line, parsed_ssid, sizeof(parsed_ssid));
-        
-        if (network_index > 0) {
-            // Check if this SSID matches the one we're looking for
-            if (strcmp(parsed_ssid, data->deauth_ssid) == 0) {
-                ESP_LOGI(TAG, "Found network '%s' at index %d", parsed_ssid, network_index);
-                execute_deauth_sequence(data, network_index);
-                return;
-            }
-        }
-        
-        // Check for end of scan results
-        if (strstr(line, "Scan results printed") != NULL) {
-            ESP_LOGW(TAG, "Network '%s' not found in scan results", data->deauth_ssid);
-            data->pending_deauth = false;
-            data->needs_redraw = true;
-        }
-        return;
-    }
-    
-    // Normal sniffer results parsing
-    if (data->line_count >= MAX_LINES) return;
-    
-    // Check for "no results" message
-    if (is_no_results_line(line)) {
-        data->loading = false;
-        data->needs_redraw = true;
-        return;
-    }
-    
-    // Check if it's an SSID line
-    if (is_ssid_line(line)) {
-        // Extract and store current SSID for following MAC lines
-        extract_ssid(line, data->current_ssid, MAX_SSID_LEN);
-        
-        // Store line
-        strncpy(data->lines[data->line_count], line, MAX_LINE_LEN - 1);
-        data->lines[data->line_count][MAX_LINE_LEN - 1] = '\0';
-        // SSID lines don't have a parent SSID
-        data->parent_ssid[data->line_count][0] = '\0';
-        data->line_count++;
-        data->loading = false;
-        data->needs_redraw = true;
-    }
-    // Check if it's a MAC line
-    else if (is_mac_line(line)) {
-        // Store line
-        strncpy(data->lines[data->line_count], line, MAX_LINE_LEN - 1);
-        data->lines[data->line_count][MAX_LINE_LEN - 1] = '\0';
-        // Store parent SSID for this MAC
-        strncpy(data->parent_ssid[data->line_count], data->current_ssid, MAX_SSID_LEN - 1);
-        data->parent_ssid[data->line_count][MAX_SSID_LEN - 1] = '\0';
-        data->line_count++;
-        data->loading = false;
-        data->needs_redraw = true;
-    }
-    // Ignore all other lines
+    for(unsigned i = 0; i < VISIBLE; ++i) draw_view_row(d, d->offset + i);
 }
-
+static void draw_locked(sniffer_results_data_t *d)
+{
+    ui_clear(); ui_draw_title("Sniffer Clients");
+    if(d->loading) ui_print_center(3,"Loading...",UI_COLOR_DIMMED);
+    else if(d->model.failed) {
+        ui_print_center(3,d->model.error,UI_COLOR_TEXT);
+        ui_print_center(5,"R: Retry",UI_COLOR_DIMMED);
+    } else if(!d->model.client_count) ui_print_center(3,"No clients",UI_COLOR_DIMMED);
+    else draw_view_window(d);
+    if(d->pending) ui_draw_status("Starting... ESC: Cancel");
+    else if(d->message[0]) ui_draw_status(d->message);
+    else ui_draw_status("UP/DN:Sel D:Deauth R:Reload");
+}
 static void draw_screen(screen_t *self)
 {
-    sniffer_results_data_t *data = (sniffer_results_data_t *)self->user_data;
-    
-    ui_clear();
-    ui_draw_title("Sniffer Results");
-    draw_content(data);
-    ui_draw_status("UP/DN:Sel D:Deauth ESC:Back");
+    sniffer_results_data_t *d=self->user_data;
+    xSemaphoreTake(d->mutex,portMAX_DELAY); draw_locked(d); xSemaphoreGive(d->mutex);
 }
-
+static void uart_line_callback(const char *line,void *user_data)
+{
+    sniffer_results_data_t *d=user_data;
+    xSemaphoreTake(d->mutex,portMAX_DELAY);
+    /* Once a list has timed out/failed, discard its remaining UART records. */
+    sc_event_t event=SC_IGNORED;
+    if(d->loading || d->pending)
+        event=sc_model_line(&d->model,line,d->pending ? d->pending_ap : NULL,d->pending ? d->pending_station : NULL);
+    if(event==SC_UPDATED) {
+        d->deadline=esp_timer_get_time()+LIST_IDLE_TIMEOUT_US;
+        if(d->model.complete) { d->loading=false; finish_snapshot(d); }
+        else if(d->model.failed) d->loading=false;
+        d->dirty=true;
+    } else if(event==SC_STARTED) {
+        d->pending=false; d->started=true; d->dirty=true;
+    } else if(event==SC_REFUSED) {
+        d->pending=false;
+        snprintf(d->message,sizeof(d->message),"%.30s",d->model.error);
+        d->dirty=true;
+    }
+    xSemaphoreGive(d->mutex);
+}
 static void on_tick(screen_t *self)
 {
-    sniffer_results_data_t *data = (sniffer_results_data_t *)self->user_data;
-    
-    // Check if redraw needed from UART callback (thread-safe)
-    if (data->needs_redraw) {
-        data->needs_redraw = false;
-        draw_content(data);
+    sniffer_results_data_t *d=self->user_data;
+    bool stop=false, started=false;
+    station_deauth_params_t *params=NULL;
+    xSemaphoreTake(d->mutex,portMAX_DELAY);
+    int64_t now=esp_timer_get_time();
+    if(d->pending && now>d->deadline) {
+        d->pending=false; stop=true; d->dirty=true;
+        d->model.failed=true;
+        snprintf(d->model.error,sizeof(d->model.error),"Start timeout; R to reload");
+        snprintf(d->message,sizeof(d->message),"Stopped; R: Reload");
+    }
+    if(d->loading && (now>d->deadline || now-d->list_start>LIST_TOTAL_TIMEOUT_US)) {
+        d->loading=false; d->model.failed=true; d->dirty=true;
+        snprintf(d->model.error,sizeof(d->model.error),"No list; update JanOS / R");
+    }
+    if(d->started) {
+        d->started=false; started=true;
+        params=calloc(1,sizeof(*params));
+        if(params) {
+            sc_mac_text(params->mac,d->pending_station);
+            sc_mac_text(params->bssid,d->pending_ap);
+            snprintf(params->ssid,sizeof(params->ssid),"%s",d->pending_name);
+        } else {
+            stop=true; snprintf(d->message,sizeof(d->message),"Not enough memory; stopped");
+        }
+    }
+    if(d->dirty) { d->dirty=false; draw_locked(d); }
+    xSemaphoreGive(d->mutex);
+    if(stop) uart_send_command("stop");
+    if(started && params) {
+        /* Never navigate/register/clear from the UART dispatch task. */
+        uart_clear_line_callback();
+        if(screen_manager_push(station_deauth_screen_create,params)!=ESP_OK) {
+            uart_send_command("stop");
+            uart_register_line_callback(uart_line_callback,d);
+            xSemaphoreTake(d->mutex,portMAX_DELAY);
+            snprintf(d->message,sizeof(d->message),"Screen error; stopped"); d->dirty=true;
+            xSemaphoreGive(d->mutex);
+        } else buzzer_beep_attack();
     }
 }
-
-static void on_key(screen_t *self, key_code_t key)
+static void on_key(screen_t *self,key_code_t key)
 {
-    sniffer_results_data_t *data = (sniffer_results_data_t *)self->user_data;
-    int visible_rows = 6;
-    
-    switch (key) {
-        case KEY_UP:
-            if (data->selected_index > 0) {
-                int old_idx = data->selected_index;
-                // Check if at first visible item on page - do page jump
-                if (data->selected_index == data->scroll_offset && data->scroll_offset > 0) {
-                    data->scroll_offset -= visible_rows;
-                    if (data->scroll_offset < 0) data->scroll_offset = 0;
-                    data->selected_index = data->scroll_offset + visible_rows - 1;
-                    if (data->selected_index >= data->line_count) {
-                        data->selected_index = data->line_count - 1;
-                    }
-                    draw_content(data);
-                } else {
-                    data->selected_index--;
-                    draw_result_line(data, old_idx);
-                    draw_result_line(data, data->selected_index);
-                }
-            } else if (data->line_count > 0) {
-                data->selected_index = data->line_count - 1;
-                data->scroll_offset = (data->selected_index / visible_rows) * visible_rows;
-                draw_content(data);
+    sniffer_results_data_t *d=self->user_data;
+    char command[96]={0}; bool leave=false, stop=false, reload=false, dirty=true;
+    xSemaphoreTake(d->mutex,portMAX_DELAY);
+    if(key==KEY_ESC || key==KEY_Q || key==KEY_BACKSPACE) {
+        leave=true; stop=d->pending || d->started;
+        d->pending=false; d->started=false;
+    } else if(key==KEY_R && !d->pending && !d->started && !d->loading) {
+        sc_model_free(&d->model); d->loading=true; d->selected=0; d->offset=0; d->view_count=0;
+        memset(d->ap_clients,0,sizeof(d->ap_clients));
+        d->message[0]=0; d->deadline=esp_timer_get_time()+LIST_IDLE_TIMEOUT_US;
+        d->list_start=esp_timer_get_time(); reload=true;
+    } else if(!d->loading && d->model.complete && !d->model.failed && !d->pending && !d->started && d->model.client_count) {
+        if(key==KEY_UP || key==KEY_DOWN) {
+            unsigned old=d->selected, old_offset=d->offset;
+            unsigned first=first_client_view(d);
+            unsigned top=client_in_window(d,false), bottom=client_in_window(d,true);
+            if(key==KEY_UP) {
+                if(d->selected==first) {
+                    d->selected=next_client_view(d,first,-1);
+                    d->offset=(d->selected/VISIBLE)*VISIBLE;
+                } else if(d->selected==top && d->offset>0) {
+                    d->offset=d->offset>VISIBLE ? d->offset-VISIBLE : 0;
+                    d->selected=client_in_window(d,true);
+                } else d->selected=next_client_view(d,d->selected,-1);
+            } else {
+                if(d->selected==next_client_view(d,first,-1)) {
+                    d->selected=first; d->offset=0;
+                } else if(d->selected==bottom && d->offset+VISIBLE<d->view_count) {
+                    d->offset+=VISIBLE;
+                    d->selected=client_in_window(d,false);
+                } else d->selected=next_client_view(d,d->selected,1);
             }
-            break;
-            
-        case KEY_DOWN:
-            if (data->selected_index < data->line_count - 1) {
-                int old_idx = data->selected_index;
-                // Check if at last visible item on page - do page jump
-                if (data->selected_index == data->scroll_offset + visible_rows - 1) {
-                    // Jump to next page - don't adjust back for partial pages
-                    data->scroll_offset += visible_rows;
-                    data->selected_index = data->scroll_offset;
-                    draw_content(data);
-                } else {
-                    data->selected_index++;
-                    draw_result_line(data, old_idx);
-                    draw_result_line(data, data->selected_index);
-                }
-            } else if (data->line_count > 0) {
-                data->selected_index = 0;
-                data->scroll_offset = 0;
-                draw_content(data);
+            if(d->offset!=old_offset) draw_view_window(d);
+            else { draw_view_row(d, old); draw_view_row(d, d->selected); }
+            dirty=false;
+        } else if(key==KEY_D) {
+            view_item_t item;
+            if(view_item(d,d->selected,&item) && !item.is_ap) {
+                sc_client_t *client=&d->model.clients[item.client];
+                sc_ap_t *ap=&d->model.aps[client->ap];
+                char bssid[18],station[18]; sc_mac_text(bssid,ap->bssid); sc_mac_text(station,client->mac);
+                memcpy(d->pending_ap,ap->bssid,6); memcpy(d->pending_station,client->mac,6);
+                sc_ap_label(ap,d->pending_name,sizeof(d->pending_name));
+                snprintf(command,sizeof(command),"start_deauth_station %s %s",bssid,station);
+                d->pending=true; d->message[0]=0; d->deadline=esp_timer_get_time()+START_TIMEOUT_US;
             }
-            break;
-            
-        case KEY_D:
-            // Check if selected line is a MAC (client) line
-            if (data->line_count > 0 && data->selected_index < data->line_count) {
-                const char *line = data->lines[data->selected_index];
-                
-                // MAC lines start with space (indented)
-                if (line[0] == ' ' && is_mac_line(line)) {
-                    // Extract MAC address
-                    char mac[18];
-                    extract_mac(line, mac, sizeof(mac));
-                    
-                    // Get parent SSID
-                    const char *ssid = data->parent_ssid[data->selected_index];
-                    
-                    // Check if we have a valid SSID
-                    if (ssid[0] == '\0') {
-                        ESP_LOGW(TAG, "No parent SSID for MAC %s", mac);
-                        break;
-                    }
-                    
-                    ESP_LOGI(TAG, "Initiating deauth on station: %s from network: %s", mac, ssid);
-                    
-                    // Store deauth target info
-                    strncpy(data->deauth_mac, mac, sizeof(data->deauth_mac) - 1);
-                    data->deauth_mac[sizeof(data->deauth_mac) - 1] = '\0';
-                    strncpy(data->deauth_ssid, ssid, sizeof(data->deauth_ssid) - 1);
-                    data->deauth_ssid[sizeof(data->deauth_ssid) - 1] = '\0';
-                    
-                    // Set pending state and request scan results to find network index
-                    data->pending_deauth = true;
-                    uart_send_command("show_scan_results");
-                    
-                    ESP_LOGI(TAG, "Waiting for scan results to find network index...");
-                }
-            }
-            break;
-            
-        case KEY_ESC:
-        case KEY_Q:
-        case KEY_BACKSPACE:
-            screen_manager_pop();
-            break;
-            
-        default:
-            break;
+        }
     }
+    if(dirty) d->dirty=true;
+    xSemaphoreGive(d->mutex);
+    if(stop) uart_send_command("stop");
+    if(reload) uart_send_command("show_sniffer_clients");
+    if(command[0] && uart_send_command(command)!=ESP_OK) {
+        xSemaphoreTake(d->mutex,portMAX_DELAY); d->pending=false;
+        snprintf(d->message,sizeof(d->message),"UART send failed"); xSemaphoreGive(d->mutex);
+    }
+    if(leave) screen_manager_pop();
 }
-
+static void on_resume(screen_t *self)
+{
+    sniffer_results_data_t *d=self->user_data;
+    uart_register_line_callback(uart_line_callback,d);
+    draw_screen(self);
+}
 static void on_destroy(screen_t *self)
 {
-    sniffer_results_data_t *data = (sniffer_results_data_t *)self->user_data;
-    
-    // Clear UART callback
+    sniffer_results_data_t *d=self->user_data;
     uart_clear_line_callback();
-    
-    if (data) {
-        free(data);
-    }
+    if(d) { sc_model_free(&d->model); vSemaphoreDelete(d->mutex); free(d); }
 }
-
-screen_t* sniffer_results_screen_create(void *params)
+screen_t *sniffer_results_screen_create(void *params)
 {
-    (void)params;  // Not used
-    
-    ESP_LOGI(TAG, "Creating sniffer results screen...");
-    
-    screen_t *screen = screen_alloc();
-    if (!screen) {
-        return NULL;
-    }
-    
-    // Allocate user data
-    sniffer_results_data_t *data = calloc(1, sizeof(sniffer_results_data_t));
-    if (!data) {
-        free(screen);
-        return NULL;
-    }
-    
-    data->loading = true;
-    data->selected_index = 0;
-    data->self = screen;
-    
-    screen->user_data = data;
-    screen->on_key = on_key;
-    screen->on_destroy = on_destroy;
-    screen->on_draw = draw_screen;
-    screen->on_tick = on_tick;
-    
-    // Register UART callback
-    uart_register_line_callback(uart_line_callback, data);
-    
-    // Send command to get results
-    uart_send_command("show_sniffer_results");
-    
-    // Draw initial screen
-    draw_screen(screen);
-    
-    ESP_LOGI(TAG, "Sniffer results screen created");
-    return screen;
+    (void)params;
+    screen_t *screen=screen_alloc(); if(!screen) return NULL;
+    sniffer_results_data_t *d=calloc(1,sizeof(*d));
+    if(!d) { free(screen); return NULL; }
+    d->mutex=xSemaphoreCreateMutex();
+    if(!d->mutex) { free(d); free(screen); return NULL; }
+    screen->user_data=d; screen->on_draw=draw_screen; screen->on_tick=on_tick;
+    screen->on_key=on_key; screen->on_destroy=on_destroy; screen->on_resume=on_resume;
+    d->loading=true; d->deadline=esp_timer_get_time()+LIST_IDLE_TIMEOUT_US; d->list_start=esp_timer_get_time();
+    uart_register_line_callback(uart_line_callback,d);
+    uart_send_command("show_sniffer_clients"); draw_screen(screen); return screen;
 }

@@ -9,6 +9,7 @@
 #include "rogue_ap_ssid_screen.h"
 #include "rogue_ap_password_screen.h"
 #include "sae_overflow_screen.h"
+#include "pixie_dust_screen.h"
 #include "handshaker_screen.h"
 #include "sniffer_screen.h"
 #include "settings.h"
@@ -16,8 +17,10 @@
 #include "text_ui.h"
 #include "buzzer.h"
 #include "esp_log.h"
+#include "display.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 static const char *TAG = "ATTACK_SEL";
 
@@ -29,6 +32,7 @@ typedef enum {
     ATTACK_SAE_OVERFLOW,
     ATTACK_HANDSHAKER,
     ATTACK_SNIFFER,
+    ATTACK_PIXIE,
     ATTACK_COUNT
 } attack_type_t;
 
@@ -47,51 +51,92 @@ static const attack_menu_def_t all_attacks[] = {
     {"SAE Overflow", ATTACK_SAE_OVERFLOW, true},
     {"Handshaker",   ATTACK_HANDSHAKER,   true},
     {"Sniffer",      ATTACK_SNIFFER,      false},
+    {"Pixie Dust",   ATTACK_PIXIE,        true},
 };
 
 #define ALL_ATTACKS_COUNT (sizeof(all_attacks) / sizeof(all_attacks[0]))
-#define MAX_VISIBLE_ATTACKS 6
+#define VISIBLE_ITEMS 6
 
-// Screen user data
 typedef struct {
     wifi_network_t *networks;
     int network_count;
     int selected_index;
-    // Dynamic filtered menu
-    attack_type_t visible_attacks[MAX_VISIBLE_ATTACKS];
-    const char *visible_names[MAX_VISIBLE_ATTACKS];
+    int scroll_offset;
+    attack_type_t visible_attacks[ATTACK_COUNT];
+    const char *visible_names[ATTACK_COUNT];
     int visible_count;
 } attack_select_data_t;
+
+static void draw_menu_row(attack_select_data_t *data, int idx)
+{
+    int row_on_screen = idx - data->scroll_offset;
+    if (row_on_screen < 0 || row_on_screen >= VISIBLE_ITEMS) return;
+    if (idx < 0 || idx >= data->visible_count) return;
+    ui_draw_menu_item(1 + row_on_screen, data->visible_names[idx],
+                      idx == data->selected_index, false, false);
+}
+
+static void redraw_menu_list(attack_select_data_t *data)
+{
+    for (int i = 0; i < VISIBLE_ITEMS; i++) {
+        int idx = data->scroll_offset + i;
+        if (idx < data->visible_count) {
+            draw_menu_row(data, idx);
+        } else {
+            display_fill_rect(0, (1 + i) * 16, DISPLAY_WIDTH, 16, UI_COLOR_BG);
+        }
+    }
+    display_fill_rect(DISPLAY_WIDTH - 16, 1 * 16, 16, 16, UI_COLOR_BG);
+    display_fill_rect(DISPLAY_WIDTH - 16, VISIBLE_ITEMS * 16, 16, 16, UI_COLOR_BG);
+    if (data->scroll_offset > 0) {
+        ui_print(UI_COLS - 2, 1, "^", UI_COLOR_DIMMED);
+    }
+    if (data->scroll_offset + VISIBLE_ITEMS < data->visible_count) {
+        ui_print(UI_COLS - 2, VISIBLE_ITEMS, "v", UI_COLOR_DIMMED);
+    }
+}
 
 static void draw_screen(screen_t *self)
 {
     attack_select_data_t *data = (attack_select_data_t *)self->user_data;
-    
+
     ui_clear();
-    
-    // Draw title - use "Test" when red team disabled, "Attack" when enabled
+
     char title[32];
-    snprintf(title, sizeof(title), "%s (%d nets)", 
+    snprintf(title, sizeof(title), "%s (%d nets)",
              settings_get_red_team_enabled() ? "Attack" : "Test",
              data->network_count);
     ui_draw_title(title);
-    
-    // Draw visible menu items
-    for (int i = 0; i < data->visible_count; i++) {
-        ui_draw_menu_item(i + 1, data->visible_names[i], i == data->selected_index, false, false);
-    }
-    
-    // Draw status bar
+    redraw_menu_list(data);
     ui_draw_status("UP/DOWN:Nav ENTER:Run ESC:Back");
 }
 
-// Optimized: redraw only two changed rows
 static void redraw_selection(attack_select_data_t *data, int old_index, int new_index)
 {
-    // Redraw old selection (now unselected)
-    ui_draw_menu_item(old_index + 1, data->visible_names[old_index], false, false, false);
-    // Redraw new selection (now selected)
-    ui_draw_menu_item(new_index + 1, data->visible_names[new_index], true, false, false);
+    draw_menu_row(data, old_index);
+    draw_menu_row(data, new_index);
+}
+
+static void move_selection(attack_select_data_t *data, int delta)
+{
+    if (data->visible_count <= 0) return;
+    int old = data->selected_index;
+    int next = old + delta;
+    if (next < 0) next = data->visible_count - 1;
+    if (next >= data->visible_count) next = 0;
+    data->selected_index = next;
+
+    int old_scroll = data->scroll_offset;
+    if (data->selected_index < data->scroll_offset) {
+        data->scroll_offset = data->selected_index;
+    } else if (data->selected_index >= data->scroll_offset + VISIBLE_ITEMS) {
+        data->scroll_offset = data->selected_index - VISIBLE_ITEMS + 1;
+    }
+    if (data->scroll_offset != old_scroll) {
+        redraw_menu_list(data);
+    } else {
+        redraw_selection(data, old, data->selected_index);
+    }
 }
 
 static void on_key(screen_t *self, key_code_t key)
@@ -100,27 +145,11 @@ static void on_key(screen_t *self, key_code_t key)
     
     switch (key) {
         case KEY_UP:
-            if (data->visible_count > 0 && data->selected_index > 0) {
-                int old = data->selected_index;
-                data->selected_index--;
-                redraw_selection(data, old, data->selected_index);
-            } else if (data->visible_count > 0) {
-                int old = data->selected_index;
-                data->selected_index = data->visible_count - 1;
-                redraw_selection(data, old, data->selected_index);
-            }
+            move_selection(data, -1);
             break;
-            
+
         case KEY_DOWN:
-            if (data->visible_count > 0 && data->selected_index < data->visible_count - 1) {
-                int old = data->selected_index;
-                data->selected_index++;
-                redraw_selection(data, old, data->selected_index);
-            } else if (data->visible_count > 0) {
-                int old = data->selected_index;
-                data->selected_index = 0;
-                redraw_selection(data, old, data->selected_index);
-            }
+            move_selection(data, 1);
             break;
             
         case KEY_ENTER:
@@ -247,6 +276,22 @@ static void on_key(screen_t *self, key_code_t key)
                             }
                         }
                         break;
+
+                    case ATTACK_PIXIE:
+                        if (data->network_count != 1) {
+                            ui_show_message("Error", "Select exactly 1 network");
+                            draw_screen(self);
+                            break;
+                        }
+                        {
+                            pixie_dust_screen_params_t *params =
+                                malloc(sizeof(pixie_dust_screen_params_t));
+                            if (params) {
+                                params->network = data->networks[0];
+                                screen_manager_push(pixie_dust_screen_create, params);
+                            }
+                        }
+                        break;
                         
                     default:
                         break;
@@ -281,7 +326,7 @@ static void build_visible_attacks(attack_select_data_t *data)
     bool red_team = settings_get_red_team_enabled();
     data->visible_count = 0;
     
-    for (int i = 0; i < (int)ALL_ATTACKS_COUNT && data->visible_count < MAX_VISIBLE_ATTACKS; i++) {
+    for (int i = 0; i < (int)ALL_ATTACKS_COUNT && data->visible_count < ATTACK_COUNT; i++) {
         // Skip red team attacks if not enabled
         if (all_attacks[i].requires_red_team && !red_team) {
             continue;

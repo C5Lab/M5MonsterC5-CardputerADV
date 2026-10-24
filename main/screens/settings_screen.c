@@ -10,6 +10,7 @@
 #include "channel_time_settings_screen.h"
 #include "sd_admin_screen.h"
 #include "nfc_settings_screen.h"
+#include "sta_mac_settings_screen.h"
 #include "settings.h"
 #include "display.h"
 #include "keyboard.h"
@@ -28,12 +29,13 @@ static const char *TAG = "SETTINGS_SCREEN";
 #define MENU_CHANNEL_TIME   3
 #define MENU_SD_ADMIN       4
 #define MENU_NFC_MODE       5
-#define MENU_SCR_TIMEOUT    6
-#define MENU_SCR_BRIGHT     7
-#define MENU_SOUND          8
-#define MENU_BAT_DISPLAY    9
-#define MENU_RED_TEAM       10
-#define MENU_ITEM_COUNT     11
+#define MENU_STA_MAC        6
+#define MENU_SCR_TIMEOUT    7
+#define MENU_SCR_BRIGHT     8
+#define MENU_SOUND          9
+#define MENU_BAT_DISPLAY    10
+#define MENU_RED_TEAM       11
+#define MENU_ITEM_COUNT     12
 #define VISIBLE_ITEMS       6
 
 // Screen dimming timeout options (in ms)
@@ -106,6 +108,9 @@ static void draw_menu_item_at(int row, int index, bool selected)
             break;
         case MENU_NFC_MODE:
             ui_draw_menu_item(row, "NFC Mode", selected, false, false);
+            break;
+        case MENU_STA_MAC:
+            ui_draw_menu_item(row, "STA MAC", selected, false, false);
             break;
         case MENU_SCR_TIMEOUT:
         {
@@ -345,6 +350,9 @@ static void on_key(screen_t *self, key_code_t key)
                     break;
                 case MENU_NFC_MODE:
                     screen_manager_push(nfc_settings_screen_create, NULL);
+                    break;
+                case MENU_STA_MAC:
+                    screen_manager_push(sta_mac_settings_screen_create, NULL);
                     break;
                 case MENU_SCR_TIMEOUT:
                     // ENTER also cycles timeout forward

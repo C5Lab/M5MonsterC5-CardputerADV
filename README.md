@@ -16,6 +16,11 @@ It is intended for M5Stack Cardputer AVD and Tab5 devices, and it can also be us
 
 Project Zero (JanOS): https://github.com/C5Lab/projectZero
 
+The sniffer client list and per-client **D** action require JanOS with the new
+`show_sniffer_clients` and `start_deauth_station` commands. Older JanOS clients
+continue using their existing commands and text formats. See
+[sniffer client behavior and tests](docs/sniffer-clients.md).
+
 ---
 
 ## Documentation
