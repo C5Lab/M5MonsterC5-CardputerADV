@@ -80,6 +80,7 @@ idf_component_register(
         "screens/bt_locator_screen.c"
         "screens/bt_locator_track_screen.c"
         "screens/bt_jammer_screen.c"
+        "screens/bt_blespam_screen.c"
         "screens/placeholder_screen.c"
         "screens/deauth_detector_screen.c"
         "screens/compromised_menu_screen.c"

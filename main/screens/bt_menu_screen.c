@@ -8,6 +8,7 @@
 #include "bt_scan_screen.h"
 #include "bt_locator_screen.h"
 #include "bt_jammer_screen.h"
+#include "bt_blespam_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
 #include <string.h>
@@ -21,6 +22,7 @@ static const char *menu_items[] = {
     "BT scan",
     "BT Locator",
     "Jammer",
+    "IOS/Samsung Spam",
 };
 
 #define MENU_ITEM_COUNT (sizeof(menu_items) / sizeof(menu_items[0]))
@@ -99,6 +101,9 @@ static void on_key(screen_t *self, key_code_t key)
                         break;
                     case 3:  // Jammer
                         screen_manager_push(bt_jammer_screen_create, NULL);
+                        break;
+                    case 4:  // IOS/Samsung Spam
+                        screen_manager_push(bt_blespam_screen_create, NULL);
                         break;
                 }
             }
