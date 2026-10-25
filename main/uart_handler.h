@@ -168,6 +168,37 @@ bool uart_check_subghz_available(int timeout_ms);
  */
 bool uart_is_subghz_available(void);
 
+/**
+ * @brief Probe the selected JanOS NFC backend with `init_nfc`.
+ * @param timeout_ms Timeout waiting for a detected/not-detected NFC response
+ * @return true when firmware reports a detected NFC controller
+ */
+bool uart_check_nfc_available(int timeout_ms);
+
+/**
+ * @brief Return the cached NFC availability flag
+ */
+bool uart_is_nfc_available(void);
+
+/**
+ * @brief Update cached NFC availability after an asynchronous UI probe
+ */
+void uart_set_nfc_available(bool available);
+
+/**
+ * @brief Re-establish an NFC command boundary using `get_nfc_bus`.
+ *
+ * Ignores stale completion markers until the bus response is observed.
+ * Leaves the regular line callback cleared.
+ */
+bool uart_resync_nfc(int timeout_ms);
+
+/** Return whether the last NFC UART command boundary is known. */
+bool uart_is_nfc_transport_synced(void);
+
+/** Update NFC transport synchronization after a verified response boundary. */
+void uart_set_nfc_transport_synced(bool synced);
+
 #endif // UART_HANDLER_H
 
 

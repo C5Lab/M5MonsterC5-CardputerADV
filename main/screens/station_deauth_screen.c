@@ -15,6 +15,7 @@ static const char *TAG = "STA_DEAUTH";
 // Screen user data
 typedef struct {
     char mac[18];   // MAC address of the station being attacked
+    char bssid[18];
     char ssid[33];  // SSID of the network
 } station_deauth_data_t;
 
@@ -40,6 +41,10 @@ static void draw_screen(screen_t *self)
     snprintf(ssid_line, sizeof(ssid_line), "Net: %.24s", data->ssid);
     ui_print(0, 4, ssid_line, UI_COLOR_HIGHLIGHT);
     
+    char ap_line[32];
+    snprintf(ap_line, sizeof(ap_line), "AP: %s", data->bssid);
+    ui_print(0, 5, ap_line, UI_COLOR_DIMMED);
+
     // Draw status bar
     ui_draw_status("ESC: Stop");
 }
@@ -98,6 +103,7 @@ screen_t* station_deauth_screen_create(void *params)
     
     // Copy data from params
     strncpy(data->mac, deauth_params->mac, sizeof(data->mac) - 1);
+    strncpy(data->bssid, deauth_params->bssid, sizeof(data->bssid) - 1);
     strncpy(data->ssid, deauth_params->ssid, sizeof(data->ssid) - 1);
     
     // Free params (ownership transferred)

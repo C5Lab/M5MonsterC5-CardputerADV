@@ -9,6 +9,8 @@
 #include "gps_module_screen.h"
 #include "channel_time_settings_screen.h"
 #include "sd_admin_screen.h"
+#include "nfc_settings_screen.h"
+#include "sta_mac_settings_screen.h"
 #include "settings.h"
 #include "display.h"
 #include "keyboard.h"
@@ -26,11 +28,14 @@ static const char *TAG = "SETTINGS_SCREEN";
 #define MENU_GPS_MODULE     2
 #define MENU_CHANNEL_TIME   3
 #define MENU_SD_ADMIN       4
-#define MENU_SCR_TIMEOUT    5
-#define MENU_SCR_BRIGHT     6
-#define MENU_SOUND          7
-#define MENU_RED_TEAM       8
-#define MENU_ITEM_COUNT     9
+#define MENU_NFC_MODE       5
+#define MENU_STA_MAC        6
+#define MENU_SCR_TIMEOUT    7
+#define MENU_SCR_BRIGHT     8
+#define MENU_SOUND          9
+#define MENU_BAT_DISPLAY    10
+#define MENU_RED_TEAM       11
+#define MENU_ITEM_COUNT     12
 #define VISIBLE_ITEMS       6
 
 // Screen dimming timeout options (in ms)
@@ -101,6 +106,12 @@ static void draw_menu_item_at(int row, int index, bool selected)
         case MENU_SD_ADMIN:
             ui_draw_menu_item(row, "Monster SD Admin", selected, false, false);
             break;
+        case MENU_NFC_MODE:
+            ui_draw_menu_item(row, "NFC Mode", selected, false, false);
+            break;
+        case MENU_STA_MAC:
+            ui_draw_menu_item(row, "STA MAC", selected, false, false);
+            break;
         case MENU_SCR_TIMEOUT:
         {
             int idx = get_timeout_option_index();
@@ -118,6 +129,11 @@ static void draw_menu_item_at(int row, int index, bool selected)
         }
         case MENU_SOUND:
             ui_draw_menu_item(row, "Enable Sound", selected, true, sound_enabled);
+            break;
+        case MENU_BAT_DISPLAY:
+            format_setting_line(line, sizeof(line), "Batt Display",
+                                settings_get_battery_show_voltage() ? "Voltage" : "Percent");
+            ui_draw_menu_item(row, line, selected, false, false);
             break;
         case MENU_RED_TEAM:
             ui_draw_menu_item(row, "Enable Red Team", selected, true, red_team);
@@ -210,7 +226,15 @@ static void cycle_timeout(int direction)
 static void adjust_brightness(int delta)
 {
     int current = (int)settings_get_screen_brightness();
-    current += delta;
+    // Snap coarse steps to tens, including when leaving the 1% minimum.
+    // Shift's single-percent steps remain relative to the current value.
+    if (delta == 10) {
+        current = (current / 10 + 1) * 10;
+    } else if (delta == -10) {
+        current = ((current - 1) / 10) * 10;
+    } else {
+        current += delta;
+    }
     if (current < 1) current = 1;
     if (current > 100) current = 100;
     settings_set_screen_brightness((uint8_t)current);
@@ -289,6 +313,9 @@ static void on_key(screen_t *self, key_code_t key)
             } else if (data->selected_index == MENU_SOUND && settings_get_sound_enabled()) {
                 settings_set_sound_enabled(false);
                 draw_menu_item_at(get_menu_row(data, MENU_SOUND), MENU_SOUND, true);
+            } else if (data->selected_index == MENU_BAT_DISPLAY) {
+                settings_set_battery_show_voltage(!settings_get_battery_show_voltage());
+                draw_menu_item_at(get_menu_row(data, MENU_BAT_DISPLAY), MENU_BAT_DISPLAY, true);
             }
             break;
 
@@ -304,6 +331,9 @@ static void on_key(screen_t *self, key_code_t key)
             } else if (data->selected_index == MENU_SOUND && !settings_get_sound_enabled()) {
                 settings_set_sound_enabled(true);
                 draw_menu_item_at(get_menu_row(data, MENU_SOUND), MENU_SOUND, true);
+            } else if (data->selected_index == MENU_BAT_DISPLAY) {
+                settings_set_battery_show_voltage(!settings_get_battery_show_voltage());
+                draw_menu_item_at(get_menu_row(data, MENU_BAT_DISPLAY), MENU_BAT_DISPLAY, true);
             }
             break;
 
@@ -326,6 +356,12 @@ static void on_key(screen_t *self, key_code_t key)
                 case MENU_SD_ADMIN:
                     screen_manager_push(sd_admin_screen_create, NULL);
                     break;
+                case MENU_NFC_MODE:
+                    screen_manager_push(nfc_settings_screen_create, NULL);
+                    break;
+                case MENU_STA_MAC:
+                    screen_manager_push(sta_mac_settings_screen_create, NULL);
+                    break;
                 case MENU_SCR_TIMEOUT:
                     // ENTER also cycles timeout forward
                     cycle_timeout(+1);
@@ -337,6 +373,10 @@ static void on_key(screen_t *self, key_code_t key)
                 case MENU_SOUND:
                     settings_set_sound_enabled(!settings_get_sound_enabled());
                     draw_menu_item_at(get_menu_row(data, MENU_SOUND), MENU_SOUND, true);
+                    break;
+                case MENU_BAT_DISPLAY:
+                    settings_set_battery_show_voltage(!settings_get_battery_show_voltage());
+                    draw_menu_item_at(get_menu_row(data, MENU_BAT_DISPLAY), MENU_BAT_DISPLAY, true);
                     break;
                 case MENU_RED_TEAM:
                     if (settings_get_red_team_enabled()) {

@@ -162,7 +162,8 @@ screen_t* global_sniffer_screen_create(void *params)
     // Register UART callback for parsing sniffer output
     uart_register_line_callback(uart_line_callback, data);
     
-    // Send start_sniffer command directly (no network selection)
+    // Clear leftover scan selection so JanOS hops all channels, not one AP.
+    uart_send_command("unselect_networks");
     uart_send_command("start_sniffer");
     buzzer_beep_attack();
     

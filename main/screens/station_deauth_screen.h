@@ -11,6 +11,7 @@
 // Parameters for creating the station deauth screen
 typedef struct {
     char mac[18];   // MAC address of the station being attacked
+    char bssid[18]; // AP identity, independent of SSID
     char ssid[33];  // SSID of the network the station is being deauthed from
 } station_deauth_params_t;
 

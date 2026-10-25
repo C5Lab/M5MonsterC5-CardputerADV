@@ -6,6 +6,7 @@
 #include "text_ui.h"
 #include "font8x16.h"
 #include "battery.h"
+#include "settings.h"
 #include "esp_timer.h"
 #include <string.h>
 #include <stdio.h>
@@ -230,26 +231,25 @@ static void draw_battery_icon(int x, int y, int level, uint16_t bg)
     if (fill_width > 0) {
         display_fill_rect(bx + 2, by + 2, fill_width, bat_height - 4, fill_color);
     }
-}
 
-/**
- * @brief Draw voltage text in the top left corner
- * @param voltage_mv Battery voltage in millivolts
- * @param bg Background color
- */
-static void draw_voltage_text(int voltage_mv, uint16_t bg)
-{
-    char volt_str[12];
-    if (voltage_mv > 0 && voltage_mv < 10000) {
-        int volts = voltage_mv / 1000;
-        int decimals = (voltage_mv % 1000) / 10;
-        snprintf(volt_str, sizeof(volt_str), "%d.%02dV", volts, decimals);
+    // Draw text to the left of the icon (color-coded like the fill).
+    // Either percentage (default) or battery voltage, per user setting.
+    char info_str[8];
+    if (settings_get_battery_show_voltage()) {
+        if (cached_voltage_mv > 0 && cached_voltage_mv < 10000) {
+            int volts = cached_voltage_mv / 1000;
+            int decimals = (cached_voltage_mv % 1000) / 10;
+            snprintf(info_str, sizeof(info_str), "%d.%02dV", volts, decimals);
+        } else {
+            snprintf(info_str, sizeof(info_str), "?.??V");
+        }
     } else {
-        snprintf(volt_str, sizeof(volt_str), "?.??V");
+        snprintf(info_str, sizeof(info_str), "%d%%", clamped_level);
     }
-    
-    // Draw in top left corner with small margin
-    ui_draw_text(2, 1, volt_str, UI_COLOR_DIMMED, bg);
+    int info_w = (int)strlen(info_str) * FONT_WIDTH;
+    int info_x = bx - 2 - info_w;
+    int info_y = by + (bat_height - FONT_HEIGHT) / 2;
+    ui_draw_text(info_x, info_y, info_str, fill_color, bg);
 }
 
 void ui_draw_title(const char *title)
@@ -259,20 +259,16 @@ void ui_draw_title(const char *title)
     // Draw title bar background
     display_fill_rect(0, 0, DISPLAY_WIDTH, FONT_HEIGHT + 2, title_bg);
     
-    // Draw title text centered
+    // Draw title text left-aligned (battery indicator lives on the right)
     if (title) {
-        int len = ui_utf8_display_len(title);
-        int x = (DISPLAY_WIDTH - len * FONT_WIDTH) / 2;
-        ui_draw_text(x, 1, title, UI_COLOR_TITLE, title_bg);
+        ui_draw_text(4, 1, title, UI_COLOR_TITLE, title_bg);
     }
-    
+
     // Draw battery indicators (uses cached values, refreshed every 30s)
     if (battery_is_available()) {
         update_battery_cache();
         if (cached_level >= 0 && cached_voltage_mv > 0) {
-            // Voltage text in top left corner
-            draw_voltage_text(cached_voltage_mv, title_bg);
-            // Battery icon at right edge
+            // Battery icon with percentage at right edge
             draw_battery_icon(DISPLAY_WIDTH - 4, 4, cached_level, title_bg);
         }
     }

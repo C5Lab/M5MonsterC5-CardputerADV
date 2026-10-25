@@ -22,6 +22,7 @@ typedef void (*text_input_callback_t)(const char *text, void *user_data);
 typedef struct {
     const char *title;              // Screen title
     const char *hint;               // Hint text below input
+    const char *initial_text;       // Optional prefilled value
     text_input_callback_t on_submit; // Called when ENTER pressed
     void *user_data;                // Passed to callback
     bool allow_empty;               // Allow submitting empty input

@@ -258,6 +258,7 @@ void app_main(void)
     // Result is cached in uart_handler and read by home_screen to gate the menu.
     if (board_detected) {
         uart_check_subghz_available(800);
+        uart_check_nfc_available(3000);
     }
 
     // Pause so user can read the boot results

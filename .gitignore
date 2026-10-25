@@ -4,3 +4,8 @@ tools/docker_bin_output/
 .flash-venv/
 **/.flash-venv/
 .claude/settings.local.json
+
+# ESP-IDF build artifacts and downloaded dependencies
+/build/
+/build-*/
+/managed_components/
