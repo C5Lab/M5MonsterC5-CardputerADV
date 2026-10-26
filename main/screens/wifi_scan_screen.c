@@ -122,8 +122,9 @@ static void draw_screen_full(screen_t *self)
     ui_draw_title("WiFi Scan");
     
     if (data->scan_complete && data->network_count == 0) {
-        // No networks found
-        ui_print_center(3, "No networks found", UI_COLOR_TEXT);
+        const char *status = uart_get_scan_status();
+        ui_print_center(3, status && (strstr(status, "busy") || strstr(status, "unknown")) ? status :
+                             "No networks found", UI_COLOR_TEXT);
     } else {
         // Scanning animation with spinner only
         const char *spinner[] = {"|", "/", "-", "\\"};

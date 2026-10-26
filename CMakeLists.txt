@@ -3,6 +3,14 @@ cmake_minimum_required(VERSION 3.16)
 # Add linker flag globally (needed for duplicate symbols in ROM)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-zmuldefs")
 
+# Keep the ESP-IDF app descriptor in sync with the version shown by Lab5.
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/main/version.h" _lab5_version_line
+     REGEX "^#define[ \t]+JANOS_ADV_VERSION[ \t]+\"[^\"]+\"$")
+if(NOT _lab5_version_line)
+  message(FATAL_ERROR "JANOS_ADV_VERSION missing from main/version.h")
+endif()
+string(REGEX REPLACE ".*\"([^\"]+)\".*" "\\1" PROJECT_VER "${_lab5_version_line}")
+
 # Bootstrap ESP-IDF build system
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
@@ -26,7 +34,6 @@ message(STATUS "Target board: ${BOARD_LOWER}")
 set(EXPORT_DIR "${CMAKE_SOURCE_DIR}/binaries-esp32s3/${BOARD_LOWER}")
 file(MAKE_DIRECTORY "${EXPORT_DIR}")
 
-set(COPY_STAMP "${CMAKE_BINARY_DIR}/copy_bins.stamp")
 set(GEN_APP_BIN_TARGET "gen_${CMAKE_PROJECT_NAME}_binary")
 set(_copy_base_dep "")
 if(TARGET ${GEN_APP_BIN_TARGET})
@@ -40,8 +47,9 @@ endif()
 if(_copy_base_dep)
   set(COPY_DEPS ${_copy_base_dep})
 
-  add_custom_command(
-    OUTPUT "${COPY_STAMP}"
+  # Export on every build: the IDF binary target is phony, and a stamp can
+  # remain newer than a freshly regenerated app image during incremental builds.
+  add_custom_target(copy_firmware ALL
     COMMAND ${CMAKE_COMMAND}
             -DDEST="${EXPORT_DIR}"
             -DBLD="${CMAKE_BINARY_DIR}"
@@ -49,11 +57,8 @@ if(_copy_base_dep)
             -DBOARD="${BOARD_LOWER}"
             -DSRC="${CMAKE_SOURCE_DIR}"
             -P "${CMAKE_SOURCE_DIR}/post_build.cmake"
-    COMMAND ${CMAKE_COMMAND} -E touch "${COPY_STAMP}"
     DEPENDS ${COPY_DEPS}
     COMMENT "Copying firmware binaries to ${EXPORT_DIR}"
   )
-
-  add_custom_target(copy_firmware ALL DEPENDS "${COPY_STAMP}")
   add_dependencies(copy_firmware ${COPY_DEPS})
 endif()

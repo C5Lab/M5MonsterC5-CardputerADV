@@ -16,6 +16,7 @@
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 static const char *TAG = "UART";
 
@@ -32,12 +33,15 @@ static void *monitor_callback_user_data = NULL;
 
 // Scan state
 static bool is_scanning = false;
+static bool scan_start_confirmed = false;
 static uart_scan_complete_callback_t scan_callback = NULL;
 static void *scan_callback_user_data = NULL;
 static wifi_network_t networks[MAX_NETWORKS];
 static int network_count = 0;
 static char scan_status[64] = "Ready";
 static int64_t scan_last_poll_us = 0;
+static int64_t scan_started_us = 0;
+#define SCAN_ACK_TIMEOUT_US 5000000
 
 // Mutex for thread safety
 static SemaphoreHandle_t uart_mutex = NULL;
@@ -49,6 +53,11 @@ static bool antisurv_active = false;
 
 // Board ping detection state
 static volatile bool pong_received = false;
+static volatile bool janos_version_received = false;
+static int janos_version_major = -1;
+static int janos_version_minor = -1;
+static int janos_version_patch = -1;
+static volatile int wps_probe_result = -1;
 
 // Sub-GHz availability detection state
 static volatile bool subghz_status_seen = false;
@@ -183,11 +192,34 @@ static void process_line(const char *line)
 
     // Handle scan mode
     if (is_scanning) {
+        // JanOS may reject the new scan while WPS owns the radio. Stop polling
+        // show_scan_results here: that command can return an older scan and
+        // make the rejected request look successful.
+        if (strstr(line, "\"code\":\"busy\"") != NULL) {
+            snprintf(scan_status, sizeof(scan_status), "Monster radio busy");
+            is_scanning = false;
+            scan_start_confirmed = false;
+            uart_scan_complete_callback_t complete = scan_callback;
+            void *complete_data = scan_callback_user_data;
+            scan_callback = NULL;
+            scan_callback_user_data = NULL;
+            if (complete) complete(NULL, 0, complete_data);
+            return;
+        }
+        // Only the JanOS success message confirms a new scan. Until then,
+        // show_scan_results output can be cached data from an earlier request.
+        if (strstr(line, "Background scan started (") != NULL) {
+            scan_start_confirmed = true;
+            snprintf(scan_status, sizeof(scan_status), "Scanning...");
+        }
+        if (!scan_start_confirmed) return;
         // Check for scan completion
-        if (strstr(line, "Scan results printed") != NULL) {
+        if (strstr(line, "Scan results printed") != NULL ||
+            strstr(line, "No networks found in last scan.") != NULL) {
             ESP_LOGI(TAG, "Scan complete, found %d networks", network_count);
             snprintf(scan_status, sizeof(scan_status), "Found %d networks", network_count);
             is_scanning = false;
+            scan_start_confirmed = false;
             
             if (scan_callback) {
                 scan_callback(networks, network_count, scan_callback_user_data);
@@ -220,6 +252,32 @@ static void process_line(const char *line)
     }
 }
 
+static void scan_finish_unknown(void)
+{
+    if (!is_scanning) return;
+    snprintf(scan_status, sizeof(scan_status), "Monster state unknown");
+    is_scanning = false;
+    scan_start_confirmed = false;
+    uart_scan_complete_callback_t complete = scan_callback;
+    void *complete_data = scan_callback_user_data;
+    scan_callback = NULL;
+    scan_callback_user_data = NULL;
+    if (complete) complete(NULL, 0, complete_data);
+}
+
+static void scan_poll(int64_t now)
+{
+    if (!is_scanning) return;
+    if (!scan_start_confirmed && now - scan_started_us >= SCAN_ACK_TIMEOUT_US) {
+        scan_finish_unknown();
+        return;
+    }
+    if (scan_start_confirmed && now - scan_last_poll_us >= 1000000) {
+        scan_last_poll_us = now;
+        uart_send_command("show_scan_results");
+    }
+}
+
 /**
  * @brief UART receive task
  */
@@ -249,13 +307,7 @@ static void uart_rx_task(void *arg)
             }
         }
 
-        if (is_scanning) {
-            int64_t now = esp_timer_get_time();
-            if (now - scan_last_poll_us >= 1000000) {
-                scan_last_poll_us = now;
-                uart_send_command("show_scan_results");
-            }
-        }
+        scan_poll(esp_timer_get_time());
     }
 }
 
@@ -409,16 +461,20 @@ esp_err_t uart_start_wifi_scan(uart_scan_complete_callback_t callback, void *use
     network_count = 0;
     memset(networks, 0, sizeof(networks));
     is_scanning = true;
+    scan_start_confirmed = false;
     scan_callback = callback;
     scan_callback_user_data = user_data;
-    scan_last_poll_us = esp_timer_get_time();
+    scan_started_us = esp_timer_get_time();
+    scan_last_poll_us = scan_started_us;
     snprintf(scan_status, sizeof(scan_status), "Starting scan...");
     
     xSemaphoreGive(uart_mutex);
 
     // Send scan command
     uart_flush_rx();
-    return uart_send_command("scan_networks");
+    esp_err_t sent = uart_send_command("scan_networks");
+    if (sent != ESP_OK) scan_finish_unknown();
+    return sent;
 }
 
 bool uart_is_scanning(void)
@@ -525,6 +581,83 @@ bool uart_check_board_ping(int timeout_ms)
     }
     
     return pong_received;
+}
+
+static void janos_version_response_callback(const char *line, void *user_data)
+{
+    (void)user_data;
+    if (!line) return;
+    const char *version = strstr(line, "JanOS version: ");
+    if (!version) return;
+    int major, minor, patch;
+    if (sscanf(version + strlen("JanOS version: "), "%d.%d.%d",
+               &major, &minor, &patch) != 3 ||
+        major < 0 || minor < 0 || patch < 0) return;
+    xSemaphoreTake(uart_mutex, portMAX_DELAY);
+    janos_version_major = major;
+    janos_version_minor = minor;
+    janos_version_patch = patch;
+    janos_version_received = true;
+    xSemaphoreGive(uart_mutex);
+}
+
+bool uart_check_janos_version(int timeout_ms)
+{
+    xSemaphoreTake(uart_mutex, portMAX_DELAY);
+    janos_version_major = janos_version_minor = janos_version_patch = -1;
+    janos_version_received = false;
+    xSemaphoreGive(uart_mutex);
+    uart_response_callback_t old_callback = line_callback;
+    void *old_user_data = line_callback_user_data;
+    uart_register_line_callback(janos_version_response_callback, NULL);
+    esp_err_t sent = uart_send_command("version");
+    for (int elapsed = 0; sent == ESP_OK && elapsed < timeout_ms &&
+                          !janos_version_received; elapsed += 10)
+        vTaskDelay(pdMS_TO_TICKS(10));
+    uart_register_line_callback(old_callback, old_user_data);
+    return janos_version_received;
+}
+
+bool uart_janos_version_at_least(int major, int minor, int patch)
+{
+    if (!uart_mutex) return false;
+    xSemaphoreTake(uart_mutex, portMAX_DELAY);
+    int current_major = janos_version_major;
+    int current_minor = janos_version_minor;
+    int current_patch = janos_version_patch;
+    xSemaphoreGive(uart_mutex);
+    if (current_major < 0) return false;
+    if (current_major != major) return current_major > major;
+    if (current_minor != minor) return current_minor > minor;
+    return current_patch >= patch;
+}
+
+static void wps_status_response_callback(const char *line, void *user_data)
+{
+    (void)user_data;
+    if (!line || !strstr(line, "\"record_type\":\"wps_status\"")) return;
+    if (strstr(line, "\"phase\":\"idle\"")) {
+        wps_probe_result = 0;
+    } else if (strstr(line, "\"phase\":\"preparing\"") ||
+               strstr(line, "\"phase\":\"running\"") ||
+               strstr(line, "\"phase\":\"cleanup\"") ||
+               strstr(line, "\"phase\":\"quarantined\"")) {
+        wps_probe_result = 1;
+    }
+}
+
+int uart_probe_wps_busy(int timeout_ms)
+{
+    wps_probe_result = -1;
+    uart_response_callback_t old_callback = line_callback;
+    void *old_user_data = line_callback_user_data;
+    uart_register_line_callback(wps_status_response_callback, NULL);
+    esp_err_t sent = uart_send_command("wps status");
+    for (int elapsed = 0; sent == ESP_OK && elapsed < timeout_ms &&
+                          wps_probe_result < 0; elapsed += 10)
+        vTaskDelay(pdMS_TO_TICKS(10));
+    uart_register_line_callback(old_callback, old_user_data);
+    return wps_probe_result;
 }
 
 static void subghz_status_response_callback(const char *line, void *user_data)

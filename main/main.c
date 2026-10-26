@@ -199,6 +199,7 @@ void app_main(void)
 
     bool board_detected = uart_check_board_ping(500);
     bool popup_dismissed = false;
+    int wps_busy = -1;
 
     // Retry until board found or user skips
     while (!board_detected && !popup_dismissed) {
@@ -214,9 +215,18 @@ void app_main(void)
         }
     }
 
+    if (board_detected) {
+        (void)uart_check_janos_version(500);
+        wps_busy = uart_probe_wps_busy(800);
+    }
+
     if (!board_detected) {
         // User pressed ESC — skip Grove check
         boot_set(1, BSTATE_WARN, "Not detected (skipped)");
+    } else if (wps_busy == 1) {
+        // The Monster answers ping; avoid radio-dependent boot probes while
+        // its WPS worker is active. Do not cancel work started by another UI.
+        boot_set(1, BSTATE_WARN, "Monster WPS busy");
     } else {
         // Board found — now check its SD
         boot_set(1, BSTATE_RUNNING, "Checking Monster SD...");
@@ -256,7 +266,7 @@ void app_main(void)
 
     // Silent probe: does the connected JanOS device expose a Sub-GHz module?
     // Result is cached in uart_handler and read by home_screen to gate the menu.
-    if (board_detected) {
+    if (board_detected && wps_busy != 1) {
         uart_check_subghz_available(800);
         uart_check_nfc_available(3000);
     }

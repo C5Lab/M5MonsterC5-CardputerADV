@@ -124,6 +124,15 @@ void uart_set_wifi_connected(bool connected);
  */
 bool uart_check_board_ping(int timeout_ms);
 
+/** Cache the JanOS version reported by the `version` command at boot. */
+bool uart_check_janos_version(int timeout_ms);
+
+/** False when version is unknown; safe to call from the UI task. */
+bool uart_janos_version_at_least(int major, int minor, int patch);
+
+/** Read `wps status`: 1 = busy, 0 = idle, -1 = no usable response. */
+int uart_probe_wps_busy(int timeout_ms);
+
 /**
  * @brief Flush pending RX data from UART driver
  */

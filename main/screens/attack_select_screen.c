@@ -258,7 +258,6 @@ static void on_key(screen_t *self, key_code_t key)
                         
                     case ATTACK_SNIFFER:
                         {
-                            uart_send_command("start_sniffer");
                             buzzer_beep_attack();
                             
                             sniffer_screen_params_t *params = malloc(sizeof(sniffer_screen_params_t));
