@@ -196,9 +196,15 @@ static void draw_screen(screen_t *self)
         snprintf(line, sizeof(line), "Channel: %d", net->channel);
     }
     ui_print(0, 5, line, UI_COLOR_TEXT);
-    
-    // Row 6: Connect hint
-    ui_print_center(6, "[ENTER to Connect]", UI_COLOR_HIGHLIGHT);
+
+    // Row 6: vendor from the scan CSV, or the connect hint when it is empty.
+    // "Vendor: " (8) plus 22 glyphs fills the 30-column row.
+    if (net->vendor[0]) {
+        snprintf(line, sizeof(line), "Vendor: %.22s", net->vendor);
+        ui_print(0, 6, line, UI_COLOR_TEXT);
+    } else {
+        ui_print_center(6, "[ENTER to Connect]", UI_COLOR_HIGHLIGHT);
+    }
     
     // Draw status bar
     ui_draw_status("ENTER:Connect ESC:Back");

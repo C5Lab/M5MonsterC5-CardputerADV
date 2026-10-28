@@ -83,8 +83,21 @@ static inline int uart_get_buffered_data_len(int port, size_t *size)
 
 static unsigned completions;
 static int completed_count;
+static wifi_network_t saved[8];
+static int saved_count;
 static void scan_done(wifi_network_t *result, int count, void *user_data)
-{ (void)result; (void)user_data; ++completions; completed_count = count; }
+{
+    (void)user_data;
+    ++completions;
+    completed_count = count;
+    saved_count = 0;
+    if (result && count > 0) {
+        int n = count < (int)(sizeof(saved) / sizeof(saved[0])) ? count
+                : (int)(sizeof(saved) / sizeof(saved[0]));
+        memcpy(saved, result, (size_t)n * sizeof(saved[0]));
+        saved_count = n;
+    }
+}
 
 int main(void)
 {
@@ -152,6 +165,99 @@ int main(void)
     assert(!uart_is_scanning());
     assert(completions == 5 && completed_count == 0);
     assert(strcmp(uart_get_scan_status(), "Found 0 networks") == 0);
+
+    /* RFC 4180 quotes and commas in SSID/vendor, plus a plain line. */
+    assert(uart_start_wifi_scan(scan_done, NULL) == ESP_OK);
+    process_line("Background scan started (min: 30 ms, max: 60 ms per channel)");
+    process_line("\"1\",\"moja \"\"specjalna\"\" siec\",\"Acme \"\"X\"\" Inc\",\"AA:BB:CC:DD:EE:FF\",\"6\",\"WPA2\",\"-50\",\"2.4GHz\"");
+    process_line("\"2\",\"Plain AP\",\"\",\"02:00:00:00:00:02\",\"11\",\"WPA/WPA2 Mixed\",\"-72\",\"5GHz\"");
+    process_line("\"3\",\"a,\"\"b\"\"\",\"Acme, \"\"X\"\"\",\"AA:BB:CC:DD:EE:03\",\"1\",\"Open\",\"-90\",\"2.4GHz\"");
+    /* Legacy double-wrapped fields from the pre-RFC encoder. */
+    process_line("\"4\",\"\"foo\"\"bar\"\",\"\"Acme \"\"X\"\" Inc\"\",\"AA:BB:CC:DD:EE:04\",\"6\",\"WPA2\",\"-40\",\"2.4GHz\"");
+    /* Quote immediately before a comma in the legacy form must not crash or shift later rows. */
+    process_line("\"8\",\"\"foo\"\",bar\"\",\"vendor\",\"AA:BB:CC:DD:EE:08\",\"6\",\"WPA2\",\"-40\",\"2.4GHz\"");
+
+    char long_line[512];
+    char ssid40[41];
+    char vendor80[81];
+    memset(ssid40, 'A', 40);
+    ssid40[40] = '\0';
+    memset(vendor80, 'V', 80);
+    vendor80[80] = '\0';
+    snprintf(long_line, sizeof(long_line),
+             "\"5\",\"%s\",\"%s\",\"AA:BB:CC:DD:EE:05\",\"36\",\"WPA3\",\"-61\",\"5GHz\"",
+             ssid40, vendor80);
+    process_line(long_line);
+
+    char quotes[33];
+    char quoted_field[80];
+    memset(quotes, '"', 32);
+    quotes[32] = '\0';
+    /* 32 quote bytes -> 64 quote characters inside one pair of enclosing quotes. */
+    quoted_field[0] = '"';
+    memcpy(quoted_field + 1, quotes, 32);
+    memcpy(quoted_field + 33, quotes, 32);
+    quoted_field[65] = '"';
+    quoted_field[66] = '\0';
+    snprintf(long_line, sizeof(long_line),
+             "\"6\",%s,\"v\",\"AA:BB:CC:DD:EE:06\",\"6\",\"WPA2\",\"-55\",\"2.4GHz\"",
+             quoted_field);
+    process_line(long_line);
+
+    process_line("Scan results printed.");
+    assert(!uart_is_scanning());
+    assert(completions == 6 && completed_count == 6 && saved_count == 6);
+
+    assert(saved[0].id == 1);
+    assert(strcmp(saved[0].ssid, "moja \"specjalna\" siec") == 0);
+    assert(strcmp(saved[0].vendor, "Acme \"X\" Inc") == 0);
+    assert(strcmp(saved[0].bssid, "AA:BB:CC:DD:EE:FF") == 0);
+    assert(saved[0].channel == 6);
+    assert(strcmp(saved[0].security, "WPA2") == 0);
+    assert(saved[0].rssi == -50);
+    assert(strcmp(saved[0].band, "2.4GHz") == 0);
+    assert(!saved[0].selected);
+
+    assert(strcmp(saved[1].ssid, "Plain AP") == 0);
+    assert(saved[1].vendor[0] == '\0');
+    assert(strcmp(saved[1].bssid, "02:00:00:00:00:02") == 0);
+    assert(saved[1].channel == 11);
+    assert(strcmp(saved[1].security, "WPA/WPA2 Mixed") == 0);
+    assert(saved[1].rssi == -72);
+    assert(strcmp(saved[1].band, "5GHz") == 0);
+
+    assert(strcmp(saved[2].ssid, "a,\"b\"") == 0);
+    assert(strcmp(saved[2].vendor, "Acme, \"X\"") == 0);
+    assert(strcmp(saved[2].bssid, "AA:BB:CC:DD:EE:03") == 0);
+    assert(saved[2].channel == 1);
+    assert(strcmp(saved[2].security, "Open") == 0);
+    assert(saved[2].rssi == -90);
+
+    assert(strcmp(saved[3].ssid, "foo\"bar") == 0);
+    assert(strcmp(saved[3].vendor, "Acme \"X\" Inc") == 0);
+    assert(strcmp(saved[3].bssid, "AA:BB:CC:DD:EE:04") == 0);
+    assert(saved[3].rssi == -40);
+
+    assert(strlen(saved[4].ssid) == 32);
+    assert(strspn(saved[4].ssid, "A") == 32);
+    assert(saved[4].ssid[32] == '\0');
+    assert(strlen(saved[4].vendor) == 60);
+    assert(strspn(saved[4].vendor, "V") == 60);
+    assert(saved[4].vendor[60] == '\0');
+    assert(strcmp(saved[4].bssid, "AA:BB:CC:DD:EE:05") == 0);
+    assert(saved[4].channel == 36);
+    assert(strcmp(saved[4].security, "WPA3") == 0);
+    assert(saved[4].rssi == -61);
+    assert(strcmp(saved[4].band, "5GHz") == 0);
+
+    assert(strlen(saved[5].ssid) == 32);
+    assert(strspn(saved[5].ssid, "\"") == 32);
+    assert(saved[5].ssid[32] == '\0');
+    assert(strcmp(saved[5].vendor, "v") == 0);
+    assert(strcmp(saved[5].bssid, "AA:BB:CC:DD:EE:06") == 0);
+    assert(saved[5].channel == 6);
+    assert(saved[5].rssi == -55);
+
     puts("UART busy scan PASS");
     return 0;
 }
