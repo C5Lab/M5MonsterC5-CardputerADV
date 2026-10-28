@@ -18,6 +18,8 @@
 // Maximum networks that can be stored
 #define MAX_NETWORKS        64
 #define MAX_SSID_LEN        33
+/* JanOS OUI names are at most 60 bytes (VENDOR_RECORD_NAME_BYTES). */
+#define MAX_VENDOR_LEN      61
 #define MAX_BSSID_LEN       18
 #define MAX_SECURITY_LEN    24
 #define MAX_BAND_LEN        8
@@ -26,6 +28,7 @@
 typedef struct {
     int id;
     char ssid[MAX_SSID_LEN];
+    char vendor[MAX_VENDOR_LEN];
     char bssid[MAX_BSSID_LEN];
     int channel;
     char security[MAX_SECURITY_LEN];

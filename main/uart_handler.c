@@ -88,7 +88,75 @@ static void log_memory_info(const char *context)
 }
 
 /**
+ * Copy src into dst, always NUL-terminated, never writing past dst_len.
+ */
+static void copy_bounded(char *dst, size_t dst_len, const char *src)
+{
+    size_t i = 0;
+    if (dst_len == 0) return;
+    if (src) {
+        while (i + 1 < dst_len && src[i] != '\0') {
+            dst[i] = src[i];
+            i++;
+        }
+    }
+    dst[i] = '\0';
+}
+
+/**
+ * Unescape one quoted CSV field in place (RFC 4180).
+ *
+ * A quote inside a field is written as "". The field ends at the first
+ * quote that is not part of such a pair. The old JanOS encoder wrapped an
+ * already-quoted field again (`""foo""bar""`); that form is not valid RFC
+ * 4180, so when the second character is a quote followed by payload text
+ * the extra wrapper is stripped. Returns the first character after the
+ * field, or NULL when `p` does not start a quoted field.
+ */
+static char *parse_one_quoted_field(char *p, char **out)
+{
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '"') return NULL;
+    p++;
+
+    /* `""` + payload is the double-wrapped legacy form, not an RFC field. */
+    bool legacy = (*p == '"' && p[1] != '"' && p[1] != ',' && p[1] != ' ' &&
+                   p[1] != '\t' && p[1] != '\r' && p[1] != '\n' && p[1] != '\0');
+    if (legacy) p++;
+
+    char *dest = p;
+    char *src = p;
+    *out = dest;
+
+    while (*src) {
+        if (*src == '"') {
+            if (src[1] == '"') {
+                char *after = src + 2;
+                while (*after == ' ' || *after == '\t') after++;
+                /* Legacy closer is the extra "" sitting on the delimiter. */
+                if (legacy && (*after == ',' || *after == '\0' ||
+                               *after == '\r' || *after == '\n')) {
+                    *dest = '\0';
+                    return after;
+                }
+                *dest++ = '"';
+                src += 2;
+                continue;
+            }
+            *dest = '\0';
+            src++;
+            if (legacy && *src == '"') src++;
+            return src;
+        }
+        *dest++ = *src++;
+    }
+    *dest = '\0';
+    return src;
+}
+
+/**
  * @brief Parse quoted CSV fields in-place.
+ * Each field is unescaped: "" inside quotes becomes one ".
  */
 static int parse_quoted_csv_fields(char *line, char **fields, int max_fields)
 {
@@ -99,16 +167,12 @@ static int parse_quoted_csv_fields(char *line, char **fields, int max_fields)
     while (*p && field_count < max_fields) {
         while (*p == ' ' || *p == '\t' || *p == ',') p++;
         if (*p != '"') break;
-        p++;
-        fields[field_count++] = p;
-        while (*p) {
-            if (*p == '"') {
-                *p = '\0';
-                p++;
-                break;
-            }
-            p++;
-        }
+        char *field = NULL;
+        char *next = parse_one_quoted_field(p, &field);
+        if (!next || !field) break;
+        fields[field_count++] = field;
+        if (next == p) break;
+        p = next;
         while (*p == ' ' || *p == '\t') p++;
         if (*p == ',') p++;
     }
@@ -128,7 +192,8 @@ static int find_network_by_bssid(const char *bssid)
 
 /**
  * @brief Parse a CSV network line
- * Format: "1","SSID","","BSSID","channel","security","rssi","band","vendor"
+ * Format: "index","SSID","vendor","BSSID","channel","auth","RSSI","band"
+ * Quotes and commas inside SSID/vendor follow RFC 4180 ("" is one ").
  */
 static bool parse_network_line(const char *line, wifi_network_t *network)
 {
@@ -143,16 +208,13 @@ static bool parse_network_line(const char *line, wifi_network_t *network)
     int field_count = parse_quoted_csv_fields(str, fields, 12);
     if (field_count >= 8) {
         network->id = atoi(fields[0]);
-        strncpy(network->ssid, fields[1], MAX_SSID_LEN - 1);
-        network->ssid[MAX_SSID_LEN - 1] = '\0';
-        strncpy(network->bssid, fields[3], MAX_BSSID_LEN - 1);
-        network->bssid[MAX_BSSID_LEN - 1] = '\0';
+        copy_bounded(network->ssid, sizeof(network->ssid), fields[1]);
+        copy_bounded(network->vendor, sizeof(network->vendor), fields[2]);
+        copy_bounded(network->bssid, sizeof(network->bssid), fields[3]);
         network->channel = atoi(fields[4]);
-        strncpy(network->security, fields[5], MAX_SECURITY_LEN - 1);
-        network->security[MAX_SECURITY_LEN - 1] = '\0';
+        copy_bounded(network->security, sizeof(network->security), fields[5]);
         network->rssi = atoi(fields[6]);
-        strncpy(network->band, fields[7], MAX_BAND_LEN - 1);
-        network->band[MAX_BAND_LEN - 1] = '\0';
+        copy_bounded(network->band, sizeof(network->band), fields[7]);
         network->selected = false;
     }
     bool ok = (field_count >= 8);
