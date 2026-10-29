@@ -13,6 +13,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <errno.h>
+#include <limits.h>
+#include <ctype.h>
 
 static const char *TAG = "DEAUTH_DETECTOR";
 
@@ -31,73 +34,82 @@ typedef struct {
 // Forward declaration
 static void draw_screen(screen_t *self);
 
+/* Require decimal digits and detect overflow before converting to int. */
+static bool parse_deauth_integer(const char *start, bool allow_negative,
+                                 int *value, const char **end)
+{
+    const char *digits = start;
+    if (allow_negative && *digits == '-') digits++;
+    if (*digits < '0' || *digits > '9') return false;
+
+    errno = 0;
+    char *parsed_end;
+    long parsed = strtol(start, &parsed_end, 10);
+    if (errno == ERANGE || parsed < INT_MIN || parsed > INT_MAX) return false;
+    *value = (int)parsed;
+    *end = parsed_end;
+    return true;
+}
+
 /**
- * @brief Parse deauth detection line
+ * @brief Parse a complete detection record, never the startup format example.
  * Format: [DEAUTH] CH: <ch> | AP: <name> (<bssid>) | RSSI: <rssi>
  */
 static bool parse_deauth_line(const char *line, deauth_detector_data_t *data)
 {
-    // Check if line starts with [DEAUTH]
     const char *marker = "[DEAUTH] CH: ";
-    const char *start = strstr(line, marker);
-    if (!start) return false;
-    
-    start += strlen(marker);
-    
-    // Parse channel
-    int channel = 0;
-    while (*start >= '0' && *start <= '9') {
-        channel = channel * 10 + (*start - '0');
-        start++;
-    }
-    
-    // Find " | AP: "
+    if (!line || !data || strncmp(line, marker, strlen(marker)) != 0) return false;
+
+    int channel, rssi;
+    const char *end;
+    if (!parse_deauth_integer(line + strlen(marker), false, &channel, &end) ||
+        channel <= 0) return false;
+
     const char *ap_marker = " | AP: ";
-    const char *ap_start = strstr(start, ap_marker);
-    if (!ap_start) return false;
-    ap_start += strlen(ap_marker);
-    
-    // Find " (" before BSSID
-    const char *bssid_start = strstr(ap_start, " (");
-    if (!bssid_start) return false;
-    
-    // Extract AP name
-    int ap_len = bssid_start - ap_start;
-    if (ap_len > 32) ap_len = 32;
-    strncpy(data->ap_name, ap_start, ap_len);
-    data->ap_name[ap_len] = '\0';
-    
-    // Skip " ("
-    bssid_start += 2;
-    
-    // Find ")" after BSSID
-    const char *bssid_end = strchr(bssid_start, ')');
-    if (!bssid_end) return false;
-    
-    // Extract BSSID
-    int bssid_len = bssid_end - bssid_start;
-    if (bssid_len > 17) bssid_len = 17;
-    strncpy(data->bssid, bssid_start, bssid_len);
-    data->bssid[bssid_len] = '\0';
-    
-    // Find " | RSSI: "
-    const char *rssi_marker = " | RSSI: ";
-    const char *rssi_start = strstr(bssid_end, rssi_marker);
-    if (!rssi_start) return false;
-    rssi_start += strlen(rssi_marker);
-    
-    // Parse RSSI (can be negative)
-    int rssi = atoi(rssi_start);
-    
-    // Update data
+    if (strncmp(end, ap_marker, strlen(ap_marker)) != 0) return false;
+    const char *ap_start = end + strlen(ap_marker);
+
+    // Use the last suffix so parentheses and delimiter-like text in SSIDs work.
+    const char *rssi_marker = ") | RSSI: ";
+    const char *bssid_end = NULL;
+    const char *candidate = ap_start;
+    while ((candidate = strstr(candidate, rssi_marker)) != NULL) {
+        bssid_end = candidate;
+        candidate++;
+    }
+    if (!bssid_end || bssid_end - ap_start < 19) return false;
+    const char *bssid_start = bssid_end - 17;
+    if (bssid_start[-2] != ' ' || bssid_start[-1] != '(') return false;
+
+    size_t ap_len = (size_t)(bssid_start - 2 - ap_start);
+    if (ap_len == 0 || ap_len > 32) return false;
+    for (size_t i = 0; i < 17; i++) {
+        if (i % 3 == 2) {
+            if (bssid_start[i] != ':') return false;
+        } else if (!isxdigit((unsigned char)bssid_start[i])) {
+            return false;
+        }
+    }
+
+    if (!parse_deauth_integer(bssid_end + strlen(rssi_marker), true, &rssi, &end) ||
+        *end != '\0') return false;
+
+    // Commit only after every field has passed validation.
+    char ap_name[33];
+    char bssid[18];
+    memcpy(ap_name, ap_start, ap_len);
+    ap_name[ap_len] = '\0';
+    memcpy(bssid, bssid_start, 17);
+    bssid[17] = '\0';
+    memcpy(data->ap_name, ap_name, ap_len + 1);
+    memcpy(data->bssid, bssid, sizeof(bssid));
     data->channel = channel;
     data->rssi = rssi;
     data->has_detection = true;
-    data->detection_count++;
-    
+    if (data->detection_count < INT_MAX) data->detection_count++;
+
     ESP_LOGI(TAG, "Parsed: CH=%d AP=%s BSSID=%s RSSI=%d (total: %d)",
              data->channel, data->ap_name, data->bssid, data->rssi, data->detection_count);
-    
     return true;
 }
 
