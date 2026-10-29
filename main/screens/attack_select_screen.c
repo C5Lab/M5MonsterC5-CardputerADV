@@ -223,7 +223,7 @@ static void on_key(screen_t *self, key_code_t key)
                             break;
                         }
                         
-                        uart_send_command("start_sae_overflow");
+                        uart_send_command("sae_overflow");
                         buzzer_beep_attack();
                         
                         {
