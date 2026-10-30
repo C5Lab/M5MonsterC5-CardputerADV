@@ -8,6 +8,7 @@
 #include "sniffer_results_screen.h"
 #include "sniffer_probes_screen.h"
 #include "karma_probes_screen.h"
+#include "radio_sniffer_screen.h"
 #include "text_ui.h"
 #include "esp_log.h"
 #include <string.h>
@@ -21,6 +22,7 @@ static const char *menu_items[] = {
     "Browse Clients",
     "Show Probes",
     "Karma",
+    "Radio Sniffer",
 };
 
 #define MENU_ITEM_COUNT (sizeof(menu_items) / sizeof(menu_items[0]))
@@ -99,6 +101,9 @@ static void on_key(screen_t *self, key_code_t key)
                         break;
                     case 3:  // Karma
                         screen_manager_push(karma_probes_screen_create, NULL);
+                        break;
+                    case 4:  // Radio Sniffer
+                        screen_manager_push(radio_sniffer_screen_create, NULL);
                         break;
                 }
             }

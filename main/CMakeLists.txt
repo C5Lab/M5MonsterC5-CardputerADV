@@ -70,6 +70,7 @@ idf_component_register(
         "screens/antisurv_screen.c"
         "screens/mesh_recon_screen.c"
         "screens/sniff_karma_menu_screen.c"
+        "screens/radio_sniffer_screen.c"
         "screens/global_sniffer_screen.c"
         "screens/karma_probes_screen.c"
         "screens/karma_html_screen.c"

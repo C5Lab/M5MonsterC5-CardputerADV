@@ -30,6 +30,7 @@ void ui_draw_title(const char *s);
 void ui_print(int x, int y, const char *s, int color);
 void ui_print_center(int y, const char *s, int color);
 void ui_draw_status(const char *s);
+void ui_draw_progress(int row, int progress, const char *text);
 """,
     "esp_log.h": "#pragma once\n#define ESP_LOGI(tag, ...) ((void)(tag))\n",
 }
