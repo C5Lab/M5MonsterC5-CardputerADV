@@ -21,6 +21,9 @@ The sniffer client list and per-client **D** action require JanOS with the new
 continue using their existing commands and text formats. See
 [sniffer client behavior and tests](docs/sniffer-clients.md).
 
+The [Deauth Detector controls](docs/deauth-detector.md) cover the passive CSA
+display and optional watch of one or more scanned BSSIDs.
+
 ---
 
 ## Documentation

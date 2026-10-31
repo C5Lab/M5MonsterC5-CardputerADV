@@ -1,233 +1,456 @@
-/* Exercise the production parser through its registered UART callback. */
+/* Host exercise of the real ADV detector screen and JanOS UART contract. */
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../main/screens/deauth_detector_screen.c"
 
 static void (*rx_callback)(const char *, void *);
 static void *rx_data;
-static unsigned draws;
-static char last_command[48];
-static char commands[32][48];
+static int64_t fake_us;
+static int send_result;
+static char commands[128][256];
 static int command_count;
 static int pops;
-static char center_row[8][40];
-static int last_progress;
+static char rows[8][96];
+
 screen_t *screen_alloc(void) { return calloc(1, sizeof(screen_t)); }
 void screen_manager_pop(void) { pops++; }
-void uart_send_command(const char *command) {
-    snprintf(last_command, sizeof(last_command), "%s", command);
-    if (command_count < 32) {
-        snprintf(commands[command_count], sizeof(commands[0]), "%s", command);
-        command_count++;
-    }
+int64_t esp_timer_get_time(void) { return fake_us; }
+int uart_send_command(const char *command)
+{
+    if (send_result) return send_result;
+    assert(command_count < 128);
+    snprintf(commands[command_count++], sizeof(commands[0]), "%s", command);
+    return 0;
 }
-void uart_register_line_callback(void (*callback)(const char *, void *), void *data) {
-    rx_callback = callback; rx_data = data;
-}
+void uart_register_line_callback(void (*callback)(const char *, void *), void *data)
+{ rx_callback = callback; rx_data = data; }
 void uart_clear_line_callback(void) { rx_callback = NULL; rx_data = NULL; }
-void ui_clear(void) { draws++; }
-void ui_draw_title(const char *s) { (void)s; }
-void ui_print(int x, int y, const char *s, int color) {
-    (void)x; (void)y; (void)s; (void)color;
+void ui_clear(void) { memset(rows, 0, sizeof(rows)); }
+void ui_draw_title(const char *s) { snprintf(rows[0], sizeof(rows[0]), "%s", s); }
+void ui_print(int x, int y, const char *s, int color)
+{
+    (void)x; (void)color;
+    if (y >= 0 && y < 8) snprintf(rows[y], sizeof(rows[y]), "%s", s);
 }
-void ui_print_center(int y, const char *s, int color) {
+void ui_print_center(int y, const char *s, int color)
+{
     (void)color;
-    if (y >= 0 && y < 8 && s) snprintf(center_row[y], sizeof(center_row[y]), "%s", s);
+    if (y >= 0 && y < 8) snprintf(rows[y], sizeof(rows[y]), "%s", s);
 }
-void ui_draw_status(const char *s) { (void)s; }
-void ui_draw_progress(int row, int progress, const char *text) {
-    (void)row; (void)text;
-    last_progress = progress;
-}
+void ui_draw_status(const char *s) { snprintf(rows[7], sizeof(rows[7]), "%s", s); }
+void ui_draw_progress(int row, int progress, const char *text)
+{ (void)row; (void)progress; (void)text; }
 
 static void rx(const char *line)
 {
     assert(rx_callback);
     rx_callback(line, rx_data);
 }
-
-static void deauth_frame(int channel, const char *ap, const char *bssid, int rssi)
+static void tick(screen_t *screen, int ms)
 {
-    char line[160];
-    snprintf(line, sizeof(line),
-             "[DEAUTH] CH: %d | AP: %s (%s) | RSSI: %d",
-             channel, ap, bssid, rssi);
-    rx(line);
+    fake_us += (int64_t)ms * 1000;
+    screen->on_tick(screen);
 }
-
-static void reject(screen_t *screen, const char *line) {
-    deauth_detector_data_t *data = screen->user_data;
-    unsigned before_draws = draws;
-    unsigned char before[sizeof(*data)];
-    memcpy(before, data, sizeof(before));
-    rx_callback(line, rx_data);
-    assert(memcmp(before, data, sizeof(before)) == 0);
-    screen->on_tick(screen);
-    assert(draws == before_draws);
-}
-
-int main(void) {
-    screen_t *screen = deauth_detector_screen_create(NULL);
-    assert(screen && rx_callback);
-    assert(strcmp(last_command, "deauth_detector") == 0);
-    deauth_detector_data_t *data = screen->user_data;
-    const char *startup = "Output: [DEAUTH] CH: <ch> | AP: <name> (<bssid>) | RSSI: <rssi>";
-    reject(screen, startup);
-    assert(!data->has_detection && data->detection_count == 0);
-
-    rx_callback("[DEAUTH] CH: 6 | AP: Lab (upstairs) AP (02:Ab:00:00:00:01) | RSSI: -47", rx_data);
-    assert(data->has_detection && data->channel == 6 && data->rssi == -47);
-    assert(strcmp(data->ap_name, "Lab (upstairs) AP") == 0);
-    assert(strcmp(data->bssid, "02:Ab:00:00:00:01") == 0);
-    assert(data->detection_count == 1 && data->needs_redraw);
-    screen->on_tick(screen);
-    assert(!data->needs_redraw);
-
-    const char *invalid[] = {
-        "Output: [DEAUTH] CH: 6 | AP: Lab (02:00:00:00:00:01) | RSSI: -47",
-        "[DEAUTH] CH: <ch> | AP: <name> (<bssid>) | RSSI: <rssi>",
-        "[DEAUTH] CH: 0 | AP: Lab (02:00:00:00:00:01) | RSSI: -47",
-        "[DEAUTH] CH: -1 | AP: Lab (02:00:00:00:00:01) | RSSI: -47",
-        "[DEAUTH] CH: 999999999999999999999999 | AP: Lab (02:00:00:00:00:01) | RSSI: -47",
-        "[DEAUTH] CH: 6x | AP: Lab (02:00:00:00:00:01) | RSSI: -47",
-        "[DEAUTH] CH: 6 | AP: Lab (<bssid>) | RSSI: -47",
-        "[DEAUTH] CH: 6 | AP: Lab (02:00:00:00:00:0Z) | RSSI: -47",
-        "[DEAUTH] CH: 6 | AP: Lab (02-00-00-00-00-01) | RSSI: -47",
-        "[DEAUTH] CH: 6 | AP: Lab (02:00:00:00:00:001) | RSSI: -47",
-        "[DEAUTH] CH: 6 | AP: Lab (02:00:00:00:00:01) | RSSI: <rssi>",
-        "[DEAUTH] CH: 6 | AP: Lab (02:00:00:00:00:01) | RSSI: -",
-        "[DEAUTH] CH: 6 | AP: Lab (02:00:00:00:00:01) | RSSI: -999999999999999999999999",
-        "[DEAUTH] CH: 6 | AP: Lab (02:00:00:00:00:01) | RSSI: 2147483648",
-        "[DEAUTH] CH: 6 | AP: Lab (02:00:00:00:00:01) | RSSI: -47junk",
-        "[DEAUTH] CH: 6 | AP:  (02:00:00:00:00:01) | RSSI: -47",
-        "[DEAUTH] CH: 6 | AP: Lab (02:00:00:00:00:01)",
-        "[DEAUTH] CH: 6 | AP: Lab (02:00:00:00:00:01) | RSSI: ",
-        "[DEAUTH] CH: 6 | AP: Lab (",
-        "[DEAUTH] CH: ", "", NULL,
-    };
-    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) reject(screen, invalid[i]);
-    reject(screen, startup);
-
-    rx_callback("[DEAUTH] CH: 149 | AP: <Unknown> (02:00:00:00:00:02) | RSSI: -82", rx_data);
-    assert(data->channel == 149 && data->rssi == -82 && data->detection_count == 2);
-    assert(strcmp(data->ap_name, "<Unknown>") == 0);
-    screen->on_tick(screen);
-    rx_callback("[DEAUTH] CH: 36 | AP: AP ) | RSSI: fake (room) (02:00:00:00:00:03) | RSSI: -50", rx_data);
-    assert(strcmp(data->ap_name, "AP ) | RSSI: fake (room)") == 0);
-    assert(data->channel == 36 && data->detection_count == 3);
-    screen->on_tick(screen);
-
+static void key(screen_t *screen, key_code_t code) { screen->on_key(screen, code); }
+static void close_screen(screen_t *screen)
+{
     screen->on_destroy(screen);
     free(screen);
     assert(!rx_callback);
-
-    // A real detection arriving first must not be discarded as startup output.
-    screen = deauth_detector_screen_create(NULL);
-    data = screen->user_data;
-    rx_callback("[DEAUTH] CH: 1 | AP: Lab (02:00:00:00:00:01) | RSSI: -30", rx_data);
-    assert(data->has_detection && data->detection_count == 1);
-    screen->on_destroy(screen);
-    free(screen);
-
-    assert(strcmp(proximity_label(-16), "HERE") == 0);
-    assert(strcmp(proximity_label(-35), "HERE") == 0);
-    assert(strcmp(proximity_label(-36), "CLOSE") == 0);
-    assert(strcmp(proximity_label(-50), "CLOSE") == 0);
-    assert(strcmp(proximity_label(-51), "NEAR") == 0);
-    assert(strcmp(proximity_label(-65), "NEAR") == 0);
-    assert(strcmp(proximity_label(-66), "FAR") == 0);
-    assert(strcmp(proximity_label(-80), "FAR") == 0);
-    assert(strcmp(proximity_label(-81), "VERY FAR") == 0);
-    assert(proximity_percent(-16) == 100);
-    assert(proximity_percent(-20) == 100);
-    assert(proximity_percent(-21) == 98);
-    assert(proximity_percent(-55) == 50);
-    assert(proximity_percent(-90) == 0);
-    assert(proximity_percent(-91) == 0);
-
-    /* Index 5 is the scan field, and hops across channels do not add up. */
-    screen = deauth_detector_screen_create(NULL);
-    data = screen->user_data;
-    int mark = command_count;
-    rx("\"1\",\"\",\"\",\"C4:2B:44:12:29:21\",\"1\",\"WPA2\",\"-43\",\"2.4GHz\"");
-    rx("\"5\",\"\"\"Home\"\"\",\"\",\"AC:22:05:83:C7:3F\",\"1\",\"WPA2\",\"-62\",\"2.4GHz\"");
-    assert(data->scan_count == 2);
-    assert(data->scan[1].index == 5);
-    assert(strcmp(data->scan[1].bssid, "AC:22:05:83:C7:3F") == 0);
-
-    deauth_frame(1, "\"Home\"", "AC:22:05:83:C7:3F", -16);
-    deauth_frame(2, "\"Home\"", "AC:22:05:83:C7:3F", -16);
-    deauth_frame(1, "\"Home\"", "AC:22:05:83:C7:3F", -16);
-    screen->on_tick(screen);
-    assert(data->phase == PHASE_SCAN);
-    assert(data->best_channel == 1 && data->best_count == 2);
-    assert(command_count == mark);
-
-    deauth_frame(1, "\"Home\"", "ac:22:05:83:c7:3f", -16);
-    assert(data->phase == PHASE_STOPPING && data->lock_index == 5);
-    screen->on_tick(screen);
-    assert(strcmp(commands[mark], "stop") == 0);
-
-    last_progress = -1;
-    center_row[4][0] = '\0';
+}
+static void enter_scan(screen_t *screen)
+{
+    deauth_detector_data_t *data = screen->user_data;
+    if (data->state == DET_START_ALL)
+        rx("Deauth Detector started - scanning all channels for deauth frames...");
+    assert(data->state == DET_ACTIVE_ALL);
+    key(screen, KEY_S);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    int commands_while_stopping = command_count;
+    rx("Deauth Detector stopped.");
+    assert(data->state == DET_STOP_FOR_SCAN && command_count == commands_while_stopping);
     rx("All operations stopped.");
-    screen->on_tick(screen);
-    assert(data->phase == PHASE_TRACKING);
-    assert(data->rssi == -16 && data->trend == TREND_NONE);
-    assert(strcmp(commands[mark + 1], "deauth_detector 5") == 0);
-    assert(strcmp(center_row[4], "HERE") == 0);
-    assert(last_progress == 100);
+    assert(strcmp(commands[command_count - 1], "scan_networks") == 0);
+    assert(data->state == DET_SCAN_WAIT_ACK);
+}
+static void complete_scan_two(screen_t *screen)
+{
+    deauth_detector_data_t *data = screen->user_data;
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    /* No result set can be used until JanOS reports the new scan complete. */
+    rx("Showing results from last scan (1 networks found):");
+    rx("\"1\",\"stale\",\"\",\"02:00:00:00:00:FF\",\"1\",\"WPA2\",\"-40\",\"2.4GHz\"");
+    rx("Scan results printed.");
+    assert(data->state == DET_SCAN_RUNNING && data->scan_count == 0);
+    int before = command_count;
+    tick(screen, 1000);
+    assert(command_count == before);
+    rx("WiFi scan completed. Found 2 networks, status: 0");
+    rx("Retrieved 2 network records in 4.2s");
+    rx("\"1\",\"Home (upstairs)\",\"\",\"02:00:00:00:00:01\",\"6\",\"WPA2\",\"-40\",\"2.4GHz\"");
+    rx("\"2\",\"Home (upstairs)\",\"\",\"02:00:00:00:00:02\",\"11\",\"WPA2\",\"-50\",\"2.4GHz\"");
+    assert(data->state != DET_PICK);
+    rx("Scan results printed.");
+    assert(data->state == DET_PICK && data->scan_count == 2);
+    assert(data->scan[0].index == 1 && data->scan[1].index == 2);
+    assert(strcmp(data->scan[0].ssid, data->scan[1].ssid) == 0);
+    assert(strcmp(data->scan[0].bssid, data->scan[1].bssid) != 0);
+}
 
-    deauth_frame(1, "\"Home\"", "AC:22:05:83:C7:3F", -20);
-    screen->on_tick(screen);
-    assert(data->trend == TREND_FARTHER);
-    assert(data->rssi == -20);
-    assert(strcmp(center_row[4], "HERE") == 0);
+int main(void)
+{
+    screen_t *screen = deauth_detector_screen_create(NULL);
+    assert(screen && rx_callback);
+    deauth_detector_data_t *data = screen->user_data;
+    assert(strcmp(commands[command_count - 1], "deauth_detector") == 0);
+    assert(data->state == DET_START_ALL);
 
-    int pops_before = pops;
-    int commands_before_esc = command_count;
-    screen->on_key(screen, KEY_ESC);
-    assert(pops == pops_before + 1);
-    assert(strcmp(last_command, "stop") == 0);
-    screen->on_tick(screen);
-    assert(command_count == commands_before_esc + 1);
-    screen->on_destroy(screen);
-    free(screen);
+    rx("Output: [DEAUTH] CH: <ch> | AP: <name> (<bssid>) | RSSI: <rssi>");
+    rx("[DETECTOR_INFO] CSA/ECSA announcements enabled.");
+    rx("[DETECTOR_WATCH] count=1 ap=1/1 CH=6 BSSID=02:00:00:00:00:01 SSID=Home");
+    assert(data->deauth_count == 0 && data->csa_count == 0);
+    rx("[DEAUTH] CH: 6 | AP: Lab (upstairs) AP (02:Ab:00:00:00:01) | RSSI: -47");
+    rx("[CSA] RX: 6 | TO: 11 | BSSID: 02:00:00:00:00:01 | TX: 02:00:00:00:00:03 | RSSI: -48 | VIA: beacon | COUNT: 3 | MODE: 0 | CLASS: - | SSID: Lab (upstairs)");
+    assert(data->deauth_count == 0 && data->csa_count == 0);
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    rx("[DEAUTH] CH: 6 | AP: Lab (upstairs) AP (02:Ab:00:00:00:01) | RSSI: -47");
+    assert(data->deauth_count == 1);
+    assert(strcmp(data->last_deauth.ap_name, "Lab (upstairs) AP") == 0);
+    assert(strcmp(data->last_deauth.bssid, "02:Ab:00:00:00:01") == 0);
+    rx("[CSA] RX: 6 | TO: 11 | BSSID: 02:00:00:00:00:01 | TX: 02:00:00:00:00:03 | RSSI: -48 | VIA: beacon | COUNT: 3 | MODE: 0 | CLASS: - | SSID: Lab (upstairs)");
+    assert(data->csa_count == 1 && data->deauth_count == 1);
+    assert(data->last_csa.rx == 6 && data->last_csa.to == 11);
+    assert(strcmp(data->last_csa.ssid, "Lab (upstairs)") == 0);
+    rx("[CSA] RX: 0 | TO: 0 | BSSID: 02:00:00:00:00:01 | TX: 02:00:00:00:00:03 | RSSI: -48 | VIA: action | COUNT: 0 | MODE: 255 | CLASS: 255 | SSID: <Unknown>");
+    assert(data->csa_count == 2 && data->last_csa.rx == 0 && data->last_csa.to == 0);
+    assert(data->last_csa.mode == 255 && strcmp(data->last_csa.class_name, "255") == 0);
+    key(screen, KEY_C);
+    screen->on_draw(screen);
+    assert(strstr(rows[0], "CSA") && strstr(rows[4], "RX"));
+    assert(strstr(rows[1], "unconfirmed"));
 
-    /* ESC while stop is in flight must not send the selected-mode command. */
-    screen = deauth_detector_screen_create(NULL);
-    data = screen->user_data;
-    mark = command_count;
-    rx("\"5\",\"\"\"Home\"\"\",\"\",\"AC:22:05:83:C7:3F\",\"1\",\"WPA2\",\"-62\",\"2.4GHz\"");
-    deauth_frame(1, "\"Home\"", "AC:22:05:83:C7:3F", -40);
-    deauth_frame(1, "\"Home\"", "AC:22:05:83:C7:3F", -40);
-    deauth_frame(1, "\"Home\"", "AC:22:05:83:C7:3F", -40);
-    screen->on_tick(screen);
-    assert(strcmp(last_command, "stop") == 0);
-    screen->on_key(screen, KEY_ESC);
+    enter_scan(screen);
+    rx("\"1\",\"stale\",\"\",\"02:00:00:00:00:FF\",\"1\",\"WPA2\",\"-40\",\"2.4GHz\"");
+    rx("Scan results printed.");
+    assert(data->scan_count == 0 && data->state == DET_SCAN_WAIT_ACK);
+    complete_scan_two(screen);
+    int before = command_count;
+    key(screen, KEY_ENTER);
+    assert(command_count == before && data->state == DET_PICK);
+    tick(screen, 10000);
+    assert(data->ping_waiting && strcmp(commands[command_count - 1], "ping") == 0);
+    key(screen, KEY_SPACE);
+    assert(data->scan[0].selected);
+    key(screen, KEY_ENTER);
+    assert(strcmp(commands[command_count - 1], "deauth_detector --only 1") == 0);
+    assert(data->state == DET_START_SELECTED);
+    assert(!data->ping_waiting);
+    assert(data->deauth_count == 0 && data->csa_count == 0);
+    assert(data->last_deauth.bssid[0] == '\0' && data->last_csa.bssid[0] == '\0');
+    rx("[DEAUTH] CH: 6 | AP: Home (02:00:00:00:00:01) | RSSI: -50");
+    rx("[CSA] RX: 6 | TO: 11 | BSSID: 02:00:00:00:00:01 | TX: 02:00:00:00:00:01 | RSSI: -40 | VIA: beacon | COUNT: 1 | MODE: 0 | CLASS: - | SSID: Home");
+    assert(data->deauth_count == 0 && data->csa_count == 0);
+    rx("Deauth Detector started - monitoring selected channels for deauth frames...");
+    assert(data->state == DET_START_SELECTED);
+    rx("[DETECTOR_WATCH] count=1 ap=1/1 CH=6 BSSID=02:00:00:00:00:01 SSID=Home (upstairs)");
+    assert(data->state == DET_ACTIVE_SELECTED && data->verified_watch_count == 1);
+    tick(screen, 5000);
+    assert(data->state == DET_ACTIVE_SELECTED);
+    int selected_deauth_before = data->deauth_count;
+    int selected_csa_before = data->csa_count;
+    rx("[DEAUTH] CH: 6 | AP: Other (02:00:00:00:00:99) | RSSI: -42");
+    rx("[CSA] RX: 6 | TO: 11 | BSSID: 02:00:00:00:00:99 | TX: 02:00:00:00:00:03 | RSSI: -48 | VIA: beacon | COUNT: 3 | MODE: 0 | CLASS: - | SSID: Other");
+    assert(data->deauth_count == selected_deauth_before && data->csa_count == selected_csa_before);
+    rx("[DEAUTH] CH: 6 | AP: Home (upstairs) (02:00:00:00:00:01) | RSSI: -41");
+    assert(data->deauth_count == selected_deauth_before + 1);
+    key(screen, KEY_W);
+    screen->on_draw(screen);
+    assert(strstr(rows[1], "1") && strstr(rows[3], "02:00:00:00:00:01"));
+
+    /* A second fresh scan clears the earlier selection; same SSID is not identity. */
+    key(screen, KEY_S);
     rx("All operations stopped.");
-    screen->on_tick(screen);
-    for (int i = mark; i < command_count; i++) {
-        assert(strncmp(commands[i], "deauth_detector", 15) != 0);
-    }
-    screen->on_destroy(screen);
-    free(screen);
+    assert(data->state == DET_SCAN_WAIT_ACK && data->scan_count == 0);
+    complete_scan_two(screen);
+    assert(!data->scan[0].selected && !data->scan[1].selected);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_DOWN);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    assert(strcmp(commands[command_count - 1], "deauth_detector --only 1 2") == 0);
+    assert(data->deauth_count == 0 && data->csa_count == 0);
+    rx("Deauth Detector started - monitoring selected channels for deauth frames...");
+    rx("[DETECTOR_WATCH] count=2 ap=1/2 CH=6 BSSID=02:00:00:00:00:01 SSID=Home");
+    assert(data->state == DET_START_SELECTED);
+    rx("[DETECTOR_WATCH] count=2 ap=2/2 CH=11 BSSID=02:00:00:00:00:02 SSID=Home");
+    assert(data->state == DET_ACTIVE_SELECTED && data->verified_watch_count == 2);
+    int popped = pops;
+    key(screen, KEY_ESC);
+    assert(pops == popped && strcmp(commands[command_count - 1], "stop") == 0);
+    rx("All operations stopped.");
+    tick(screen, 1);
+    assert(pops == popped + 1);
+    close_screen(screen);
 
-    /* Three frames for a BSSID that was not in the scan stay in scan mode. */
+    /* JanOS itself prints scan rows after WIFI_EVENT_SCAN_DONE, without a
+       `Showing results ...` header. A stale `Scan still in progress` line
+       cannot complete the list; only its marker can. */
     screen = deauth_detector_screen_create(NULL);
     data = screen->user_data;
-    mark = command_count;
-    deauth_frame(6, "Ghost", "02:00:00:00:00:99", -70);
-    deauth_frame(6, "Ghost", "02:00:00:00:00:99", -70);
-    deauth_frame(6, "Ghost", "02:00:00:00:00:99", -70);
-    screen->on_tick(screen);
-    assert(data->phase == PHASE_SCAN);
-    assert(data->ap_missing);
-    assert(command_count == mark);
-    screen->on_destroy(screen);
-    free(screen);
+    enter_scan(screen);
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    int auto_before = command_count;
+    tick(screen, 1000);
+    assert(command_count == auto_before);
+    rx("Scan still in progress... Please wait.");
+    rx("WiFi scan completed. Found 2 networks, status: 0");
+    rx("Retrieved 2 network records in 4.2s");
+    rx("\"1\",\"JanOS A\",\"\",\"02:00:00:00:00:21\",\"6\",\"WPA2\",\"-40\",\"2.4GHz\"");
+    rx("\"2\",\"JanOS B\",\"\",\"02:00:00:00:00:22\",\"11\",\"WPA2\",\"-50\",\"2.4GHz\"");
+    assert(data->state != DET_PICK);
+    rx("Scan results printed.");
+    assert(data->state == DET_PICK && data->scan_count == 2);
+    assert(data->scan[0].index == 1 && data->scan[1].index == 2);
+    key(screen, KEY_DOWN);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    assert(strcmp(commands[command_count - 1], "deauth_detector --only 2") == 0);
+    close_screen(screen);
 
-    puts("Deauth detector parser PASS");
+    /* JanOS scan may repeat one BSSID; indices stay intact, WATCH is unique. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    rx("Retrieved 2 network records in 3.1s");
+    rx("\"1\",\"Mirror\",\"\",\"02:00:00:00:00:04\",\"6\",\"WPA2\",\"-40\",\"2.4GHz\"");
+    rx("\"2\",\"Mirror\",\"\",\"02:00:00:00:00:04\",\"11\",\"WPA2\",\"-48\",\"2.4GHz\"");
+    rx("Scan results printed.");
+    assert(data->state == DET_PICK && data->scan_count == 2);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_DOWN);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    assert(strcmp(commands[command_count - 1], "deauth_detector --only 1 2") == 0);
+    assert(data->watch_expected_count == 1);
+    rx("Deauth Detector started - monitoring selected channels for deauth frames...");
+    rx("[DETECTOR_WATCH] count=1 ap=1/1 CH=6 BSSID=02:00:00:00:00:04 SSID=Mirror");
+    assert(data->state == DET_ACTIVE_SELECTED);
+    close_screen(screen);
+
+    /* Incomplete rows and wrong 1-based index never become selectable. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    rx("Retrieved 2 network records in 3.1s");
+    rx("\"1\",\"One\",\"\",\"02:00:00:00:00:01\",\"6\",\"WPA2\",\"-40\",\"2.4GHz\"");
+    rx("Scan results printed.");
+    assert(data->state == DET_ERROR && data->scan_count == 0);
+    close_screen(screen);
+
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    rx("Retrieved 1 network records in 3.1s");
+    rx("\"3\",\"Wrong\",\"\",\"02:00:00:00:00:03\",\"6\",\"WPA2\",\"-40\",\"2.4GHz\"");
+    rx("Scan results printed.");
+    assert(data->state == DET_ERROR && data->scan_count == 0);
+    close_screen(screen);
+
+    /* No scan ACK, rejected start, no start ACK, and mismatched WATCH are visible. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    tick(screen, 6000);
+    assert(data->state == DET_ERROR && data->scan_count == 0);
+    close_screen(screen);
+
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    rx("Scan failed with status: 1");
+    assert(data->state == DET_ERROR && data->scan_count == 0);
+    close_screen(screen);
+
+    /* JanOS omits the marker for zero results; a missing marker for a
+       nonempty list must never make its indices selectable. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    rx("Retrieved 0 network records in 2.1s");
+    assert(data->state == DET_ERROR && data->scan_count == 0);
+    close_screen(screen);
+
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    rx("Retrieved 1 network records in 2.1s");
+    rx("\"1\",\"No marker\",\"\",\"02:00:00:00:00:31\",\"6\",\"WPA2\",\"-40\",\"2.4GHz\"");
+    assert(data->state == DET_SCAN_COLLECT);
+    tick(screen, 36000);
+    assert(data->state == DET_ERROR && data->scan_count == 0);
+    close_screen(screen);
+
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth detector already active. Use 'stop' to stop it first.");
+    assert(data->state == DET_ERROR);
+    close_screen(screen);
+
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    tick(screen, 36000);
+    assert(data->state == DET_ERROR);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    key(screen, KEY_R);
+    assert(data->state == DET_STOP_FOR_SCAN);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    rx("All operations stopped.");
+    assert(data->state == DET_SCAN_WAIT_ACK);
+    assert(strcmp(commands[command_count - 1], "scan_networks") == 0);
+    close_screen(screen);
+
+    /* Another scan on this UART invalidates a previously complete selection. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    complete_scan_two(screen);
+    key(screen, KEY_SPACE);
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    assert(data->state == DET_ERROR && data->scan_count == 0);
+    close_screen(screen);
+
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    complete_scan_two(screen);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    rx("Deauth Detector started - monitoring selected channels for deauth frames...");
+    rx("[DETECTOR_WATCH] count=1 ap=1/1 CH=6 BSSID=02:00:00:00:00:02 SSID=Wrong");
+    assert(data->state != DET_ACTIVE_SELECTED);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    close_screen(screen);
+
+    /* A matching BSSID with a different JanOS watch channel is unverified. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    complete_scan_two(screen);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    rx("Deauth Detector started - monitoring selected channels for deauth frames...");
+    rx("[DETECTOR_WATCH] count=1 ap=1/1 CH=11 BSSID=02:00:00:00:00:01 SSID=Home (upstairs)");
+    assert(data->state != DET_ACTIVE_SELECTED);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    close_screen(screen);
+
+    /* Selection is invalidated when the same UART stops answering pings. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    complete_scan_two(screen);
+    key(screen, KEY_SPACE);
+    tick(screen, 11000);
+    assert(strcmp(commands[command_count - 1], "ping") == 0);
+    tick(screen, 6000);
+    assert(data->state == DET_DISCONNECTED && data->scan_count == 0);
+    close_screen(screen);
+
+    /* Quoted SSIDs decode correctly, and A returns to the legacy command. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    rx("Retrieved 1 network records in 3.1s");
+    rx("\"1\",\"Lab \"\"A\"\" (1)\",\"\",\"02:00:00:00:00:01\",\"6\",\"WPA2\",\"-40\",\"2.4GHz\"");
+    rx("Scan results printed.");
+    assert(data->state == DET_PICK && strcmp(data->scan[0].ssid, "Lab \"A\" (1)") == 0);
+    key(screen, KEY_A);
+    assert(data->state == DET_START_ALL && data->scan_count == 0);
+    assert(strcmp(commands[command_count - 1], "deauth_detector") == 0);
+    key(screen, KEY_Q);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    rx("All operations stopped.");
+    tick(screen, 1);
+    close_screen(screen);
+
+    /* JanOS must acknowledge --only and prove the requested BSSID. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    complete_scan_two(screen);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    rx("Invalid watch index '1' (valid: 1-2). Detector not started.");
+    assert(data->state == DET_ERROR && data->scan_count == 0);
+    close_screen(screen);
+
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    complete_scan_two(screen);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    tick(screen, 9000);
+    assert(data->state == DET_ERROR);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    close_screen(screen);
+
+    /* JanOS refuses a 65-AP watch scan even if the first rows fit locally. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    rx("Background scan started (min: 20 ms, max: 40 ms per channel)");
+    rx("Retrieved 65 network records in 3.1s");
+    assert(data->state == DET_ERROR && data->scan_count == 0);
+    close_screen(screen);
+
+    /* An old unanswered ping cannot invalidate the next mode. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    complete_scan_two(screen);
+    tick(screen, 11000);
+    assert(strcmp(commands[command_count - 1], "ping") == 0);
+    key(screen, KEY_A);
+    assert(data->state == DET_START_ALL);
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    tick(screen, 6000);
+    assert(data->state == DET_ACTIVE_ALL);
+    close_screen(screen);
+
+    /* Failed stop send and absent stop ACK remain visible, with ESC retry. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    popped = pops;
+    send_result = 1;
+    key(screen, KEY_ESC);
+    assert(pops == popped && data->state == DET_ACTIVE_ALL);
+    assert(strstr(data->message, "Stop") != NULL);
+    send_result = 0;
+    key(screen, KEY_Q);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    tick(screen, 36000);
+    assert(pops == popped && data->state == DET_ERROR);
+    assert(strstr(data->message, "stop response") != NULL);
+    key(screen, KEY_ESC);
+    rx("Deauth Detector stopped.");
+    tick(screen, 1);
+    assert(pops == popped && data->state == DET_STOP_EXIT);
+    rx("All operations stopped.");
+    tick(screen, 1);
+    assert(pops == popped + 1);
+    close_screen(screen);
+
+    puts("ADV detector contract PASS");
     return 0;
 }
