@@ -13,6 +13,9 @@ static char commands[128][256];
 static int command_count;
 static int pops;
 static char rows[8][96];
+static int full_clears;
+static int content_clears;
+static int title_draws;
 
 screen_t *screen_alloc(void) { return calloc(1, sizeof(screen_t)); }
 void screen_manager_pop(void) { pops++; }
@@ -27,8 +30,19 @@ int uart_send_command(const char *command)
 void uart_register_line_callback(void (*callback)(const char *, void *), void *data)
 { rx_callback = callback; rx_data = data; }
 void uart_clear_line_callback(void) { rx_callback = NULL; rx_data = NULL; }
-void ui_clear(void) { memset(rows, 0, sizeof(rows)); }
-void ui_draw_title(const char *s) { snprintf(rows[0], sizeof(rows[0]), "%s", s); }
+void ui_clear(void) { ++full_clears; memset(rows, 0, sizeof(rows)); }
+void display_fill_rect(int x, int y, int w, int h, uint16_t color)
+{
+    (void)color;
+    assert(x == 0 && y == 19 && w == DISPLAY_WIDTH && h == 98);
+    ++content_clears;
+    for (int row = 1; row <= 6; ++row) rows[row][0] = '\0';
+}
+void ui_draw_title(const char *s)
+{
+    ++title_draws;
+    snprintf(rows[0], sizeof(rows[0]), "%s", s);
+}
 void ui_print(int x, int y, const char *s, int color)
 {
     (void)x; (void)color;
@@ -104,6 +118,7 @@ int main(void)
     screen_t *screen = deauth_detector_screen_create(NULL);
     assert(screen && rx_callback);
     deauth_detector_data_t *data = screen->user_data;
+    assert(full_clears == 1 && title_draws == 1);
     assert(strcmp(commands[command_count - 1], "deauth_detector") == 0);
     assert(data->state == DET_START_ALL);
 
@@ -115,11 +130,22 @@ int main(void)
     rx("[CSA] RX: 6 | TO: 11 | BSSID: 02:00:00:00:00:01 | TX: 02:00:00:00:00:03 | RSSI: -48 | VIA: beacon | COUNT: 3 | MODE: 0 | CLASS: - | SSID: Lab (upstairs)");
     assert(data->deauth_count == 0 && data->csa_count == 0);
     rx("Deauth Detector started - scanning all channels for deauth frames...");
+    int clears_before = full_clears;
+    int titles_before = title_draws;
+    screen->on_draw(screen);
+    assert(full_clears == clears_before && title_draws == titles_before);
+    assert(content_clears >= 2);
+    assert(strcmp(rows[1], "All networks / all channels") == 0);
+    clears_before = full_clears;
     rx("[DEAUTH] CH: 6 | AP: Lab (upstairs) AP (02:Ab:00:00:00:01) | RSSI: -47");
+    tick(screen, 1);
+    assert(full_clears == clears_before);
     assert(data->deauth_count == 1);
     assert(strcmp(data->last_deauth.ap_name, "Lab (upstairs) AP") == 0);
     assert(strcmp(data->last_deauth.bssid, "02:Ab:00:00:00:01") == 0);
     rx("[CSA] RX: 6 | TO: 11 | BSSID: 02:00:00:00:00:01 | TX: 02:00:00:00:00:03 | RSSI: -48 | VIA: beacon | COUNT: 3 | MODE: 0 | CLASS: - | SSID: Lab (upstairs)");
+    tick(screen, 1);
+    assert(full_clears == clears_before);
     assert(data->csa_count == 1 && data->deauth_count == 1);
     assert(data->last_csa.rx == 6 && data->last_csa.to == 11);
     assert(strcmp(data->last_csa.ssid, "Lab (upstairs)") == 0);
@@ -127,15 +153,29 @@ int main(void)
     assert(data->csa_count == 2 && data->last_csa.rx == 0 && data->last_csa.to == 0);
     assert(data->last_csa.mode == 255 && strcmp(data->last_csa.class_name, "255") == 0);
     key(screen, KEY_C);
+    clears_before = full_clears;
+    titles_before = title_draws;
     screen->on_draw(screen);
+    assert(full_clears == clears_before && title_draws == titles_before + 1);
     assert(strstr(rows[0], "CSA") && strstr(rows[4], "RX"));
     assert(strstr(rows[1], "unconfirmed"));
+    assert(screen->on_resume);
+    snprintf(rows[0], sizeof(rows[0]), "Other screen");
+    clears_before = full_clears;
+    screen->on_resume(screen);
+    tick(screen, 1);
+    assert(full_clears == clears_before + 1);
+    assert(strcmp(rows[0], "CSA ANNOUNCEMENTS") == 0);
 
     enter_scan(screen);
+    screen->on_draw(screen);
+    assert(rows[1][0] == '\0' && rows[4][0] == '\0' && rows[6][0] == '\0');
     rx("\"1\",\"stale\",\"\",\"02:00:00:00:00:FF\",\"1\",\"WPA2\",\"-40\",\"2.4GHz\"");
     rx("Scan results printed.");
     assert(data->scan_count == 0 && data->state == DET_SCAN_WAIT_ACK);
     complete_scan_two(screen);
+    screen->on_draw(screen);
+    assert(strcmp(rows[1], "Selected networks 0/2") == 0);
     int before = command_count;
     key(screen, KEY_ENTER);
     assert(command_count == before && data->state == DET_PICK);
@@ -156,6 +196,8 @@ int main(void)
     assert(data->state == DET_START_SELECTED);
     rx("[DETECTOR_WATCH] count=1 ap=1/1 CH=6 BSSID=02:00:00:00:00:01 SSID=Home (upstairs)");
     assert(data->state == DET_ACTIVE_SELECTED && data->verified_watch_count == 1);
+    screen->on_draw(screen);
+    assert(strcmp(rows[1], "Selected BSSIDs: 1") == 0);
     tick(screen, 5000);
     assert(data->state == DET_ACTIVE_SELECTED);
     int selected_deauth_before = data->deauth_count;
@@ -187,8 +229,21 @@ int main(void)
     rx("[DETECTOR_WATCH] count=2 ap=2/2 CH=11 BSSID=02:00:00:00:00:02 SSID=Home");
     assert(data->state == DET_ACTIVE_SELECTED && data->verified_watch_count == 2);
     int popped = pops;
+    int before_exit = command_count;
     key(screen, KEY_ESC);
-    assert(pops == popped && strcmp(commands[command_count - 1], "stop") == 0);
+    assert(pops == popped && command_count == before_exit);
+    screen->on_draw(screen);
+    assert(strcmp(rows[0], "EXIT DEAUTH DETECTOR?") == 0);
+    assert(strstr(rows[7], "ENTER:Yes") != NULL);
+    key(screen, KEY_Q); /* Cancel leaves the detector running. */
+    assert(data->state == DET_ACTIVE_SELECTED && command_count == before_exit);
+    key(screen, KEY_ESC);
+    key(screen, KEY_ENTER);
+    assert(data->state == DET_STOP_EXIT && command_count == before_exit + 1);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    rx("Deauth Detector stopped.");
+    tick(screen, 1);
+    assert(pops == popped);
     rx("All operations stopped.");
     tick(screen, 1);
     assert(pops == popped + 1);
@@ -377,6 +432,8 @@ int main(void)
     assert(data->state == DET_START_ALL && data->scan_count == 0);
     assert(strcmp(commands[command_count - 1], "deauth_detector") == 0);
     key(screen, KEY_Q);
+    assert(strcmp(commands[command_count - 1], "deauth_detector") == 0);
+    key(screen, KEY_ENTER);
     assert(strcmp(commands[command_count - 1], "stop") == 0);
     rx("All operations stopped.");
     tick(screen, 1);
@@ -435,17 +492,139 @@ int main(void)
     send_result = 1;
     key(screen, KEY_ESC);
     assert(pops == popped && data->state == DET_ACTIVE_ALL);
+    key(screen, KEY_ENTER);
+    assert(pops == popped && data->state == DET_ACTIVE_ALL);
     assert(strstr(data->message, "Stop") != NULL);
     send_result = 0;
     key(screen, KEY_Q);
+    key(screen, KEY_ENTER);
     assert(strcmp(commands[command_count - 1], "stop") == 0);
     tick(screen, 36000);
     assert(pops == popped && data->state == DET_ERROR);
     assert(strstr(data->message, "stop response") != NULL);
     key(screen, KEY_ESC);
+    key(screen, KEY_ENTER);
     rx("Deauth Detector stopped.");
     tick(screen, 1);
     assert(pops == popped && data->state == DET_STOP_EXIT);
+    rx("All operations stopped.");
+    tick(screen, 1);
+    assert(pops == popped + 1);
+    close_screen(screen);
+
+    /* Even a completed scan or a lost connection must not bypass JanOS stop. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    enter_scan(screen);
+    complete_scan_two(screen);
+    popped = pops;
+    before_exit = command_count;
+    key(screen, KEY_ESC);
+    assert(pops == popped && command_count == before_exit);
+    key(screen, KEY_ENTER);
+    assert(data->state == DET_STOP_EXIT && command_count == before_exit + 1);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    rx("All operations stopped.");
+    tick(screen, 1);
+    assert(pops == popped + 1);
+    close_screen(screen);
+
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    tick(screen, 11000);
+    tick(screen, 6000);
+    assert(data->state == DET_DISCONNECTED);
+    popped = pops;
+    before_exit = command_count;
+    key(screen, KEY_Q);
+    assert(pops == popped && command_count == before_exit);
+    key(screen, KEY_ENTER);
+    assert(data->state == DET_STOP_EXIT && command_count == before_exit + 1);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    rx("Deauth Detector stopped.");
+    tick(screen, 1);
+    assert(pops == popped);
+    rx("All operations stopped.");
+    tick(screen, 1);
+    assert(pops == popped + 1);
+    close_screen(screen);
+
+    /* Confirmed exit reuses an already sent stop without starting a scan. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    key(screen, KEY_S);
+    assert(data->state == DET_STOP_FOR_SCAN);
+    popped = pops;
+    before_exit = command_count;
+    key(screen, KEY_ESC);
+    key(screen, KEY_ENTER);
+    assert(data->state == DET_STOP_EXIT && command_count == before_exit);
+    rx("All operations stopped.");
+    tick(screen, 1);
+    assert(pops == popped + 1 && command_count == before_exit);
+    close_screen(screen);
+
+    /* A stop timeout while the exit question is open must reveal the error. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    key(screen, KEY_S);
+    key(screen, KEY_ESC);
+    screen->on_draw(screen);
+    assert(strcmp(rows[0], "EXIT DEAUTH DETECTOR?") == 0);
+    tick(screen, 36000);
+    assert(data->state == DET_ERROR);
+    screen->on_draw(screen);
+    assert(strcmp(rows[0], "DEAUTH DETECTOR") == 0);
+    assert(strstr(rows[2], "No JanOS stop response") != NULL);
+    popped = pops;
+    key(screen, KEY_ESC);
+    key(screen, KEY_ENTER);
+    assert(data->state == DET_STOP_EXIT);
+    rx("All operations stopped.");
+    tick(screen, 1);
+    assert(pops == popped + 1);
+    close_screen(screen);
+
+    /* Connection loss while confirming exit must replace the question. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    tick(screen, 11000);
+    assert(data->ping_waiting);
+    key(screen, KEY_ESC);
+    tick(screen, 6000);
+    assert(data->state == DET_DISCONNECTED);
+    screen->on_draw(screen);
+    assert(strcmp(rows[0], "DEAUTH DETECTOR") == 0);
+    assert(strstr(rows[2], "JanOS connection lost") != NULL);
+    popped = pops;
+    key(screen, KEY_ESC);
+    key(screen, KEY_ENTER);
+    assert(data->state == DET_STOP_EXIT);
+    rx("All operations stopped.");
+    tick(screen, 1);
+    assert(pops == popped + 1);
+    close_screen(screen);
+
+    /* Confirming during an in-flight stop must keep its original deadline. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    key(screen, KEY_S);
+    tick(screen, 34000);
+    assert(data->state == DET_STOP_FOR_SCAN);
+    key(screen, KEY_ESC);
+    key(screen, KEY_ENTER);
+    assert(data->state == DET_STOP_EXIT);
+    tick(screen, 2000);
+    assert(data->state == DET_ERROR);
+    popped = pops;
+    key(screen, KEY_ESC);
+    key(screen, KEY_ENTER);
+    assert(data->state == DET_STOP_EXIT);
     rx("All operations stopped.");
     tick(screen, 1);
     assert(pops == popped + 1);

@@ -28,6 +28,9 @@ static const char *TAG = "DEAUTH_DETECTOR";
 #define STOP_TIMEOUT_US 35000000LL
 #define PING_INTERVAL_US 10000000LL
 #define PING_TIMEOUT_US 5000000LL
+#define DET_CONTENT_Y_START 19
+#define DET_CONTENT_Y_END 117
+#define DET_CONTENT_HEIGHT (DET_CONTENT_Y_END - DET_CONTENT_Y_START)
 
 typedef enum {
     DET_START_ALL,
@@ -97,9 +100,12 @@ typedef struct {
     bool start_ack;
     bool ping_waiting;
     bool exit_ready;
+    bool exit_confirm_pending;
     bool stop_send_failed;
     bool needs_redraw;
     bool leaving;
+    bool ui_initialized;
+    char rendered_title[32];
     int64_t state_started_us;
     int64_t last_ping_us;
     int64_t ping_sent_us;
@@ -361,6 +367,7 @@ static bool parse_watch_line(const char *line, int *count, int *ordinal,
 
 static void fail(deauth_detector_data_t *data, const char *message)
 {
+    data->exit_confirm_pending = false;
     clear_scan(data);
     set_state(data, DET_ERROR);
     set_message(data, message);
@@ -720,13 +727,13 @@ static void draw_scan(const deauth_detector_data_t *data)
         ui_print_center(3, "Waiting for results", UI_COLOR_HIGHLIGHT);
     }
     ui_print_center(5, "Indices valid after marker", UI_COLOR_DIMMED);
-    ui_draw_status("ESC/Q: Stop and back");
+    ui_draw_status("ESC/Q: Exit");
 }
 
 static void draw_pick(const deauth_detector_data_t *data)
 {
     char line[64];
-    snprintf(line, sizeof(line), "Wybrane sieci %d/%d", selected_count(data), data->scan_count);
+    snprintf(line, sizeof(line), "Selected networks %d/%d", selected_count(data), data->scan_count);
     print_line(1, line, UI_COLOR_TEXT);
     int first = (data->cursor / 2) * 2;
     for (int slot = 0; slot < 2 && first + slot < data->scan_count; ++slot) {
@@ -741,7 +748,7 @@ static void draw_pick(const deauth_detector_data_t *data)
         print_line(3 + slot * 2, line, UI_COLOR_DIMMED);
     }
     print_line(6, data->message, UI_COLOR_HIGHLIGHT);
-    ui_draw_status("SP:Mark EN:Start R:Scan A:All");
+    ui_draw_status("SP:Mark EN:Run R:Scan A:All");
 }
 
 static void draw_watch(const deauth_detector_data_t *data)
@@ -759,16 +766,16 @@ static void draw_watch(const deauth_detector_data_t *data)
         snprintf(line, sizeof(line), " %s", ap->bssid);
         print_line(3 + slot * 2, line, UI_COLOR_DIMMED);
     }
-    ui_draw_status("UP/DN browse C:CSA S:Scan");
+    ui_draw_status("UP/DN C:CSA S:Scan ESC:Exit");
 }
 
 static void draw_deauth(const deauth_detector_data_t *data)
 {
     char line[64];
     if (data->state == DET_ACTIVE_SELECTED) {
-        snprintf(line, sizeof(line), "Wybrane sieci: %d BSSID", data->watch_expected_count);
+        snprintf(line, sizeof(line), "Selected BSSIDs: %d", data->watch_expected_count);
     } else {
-        snprintf(line, sizeof(line), "Wszystkie sieci / kanaly");
+        snprintf(line, sizeof(line), "All networks / all channels");
     }
     print_line(1, line, UI_COLOR_HIGHLIGHT);
     snprintf(line, sizeof(line), "DEAUTH %d   CSA %d", data->deauth_count, data->csa_count);
@@ -789,7 +796,7 @@ static void draw_deauth(const deauth_detector_data_t *data)
     } else {
         print_line(6, "C: CSA notices", UI_COLOR_TEXT);
     }
-    ui_draw_status("S:Scan A:All C:CSA ESC:Stop");
+    ui_draw_status("S:Scan A:All C:CSA ESC:Exit");
 }
 
 static void draw_csa(const deauth_detector_data_t *data)
@@ -815,15 +822,31 @@ static void draw_csa(const deauth_detector_data_t *data)
         ui_print_center(3, "No CSA announcement yet", UI_COLOR_DIMMED);
         ui_print_center(5, "AP switch unconfirmed", UI_COLOR_DIMMED);
     }
-    ui_draw_status("C:DEAUTH W:Watch ESC:Stop");
+    ui_draw_status("C:DEAUTH W:Watch ESC:Exit");
 }
 
 static void draw_screen(screen_t *self)
 {
     deauth_detector_data_t *data = self->user_data;
     if (!data) return;
-    ui_clear();
-    ui_draw_title(data->view == VIEW_CSA ? "CSA ANNOUNCEMENTS" : "DEAUTH DETECTOR");
+    const char *title = data->exit_confirm_pending ? "EXIT DEAUTH DETECTOR?" :
+                        data->view == VIEW_CSA ? "CSA ANNOUNCEMENTS" : "DEAUTH DETECTOR";
+    if (!data->ui_initialized) {
+        ui_clear();
+        data->ui_initialized = true;
+        data->rendered_title[0] = '\0';
+    }
+    if (strcmp(data->rendered_title, title) != 0) {
+        ui_draw_title(title);
+        snprintf(data->rendered_title, sizeof(data->rendered_title), "%s", title);
+    }
+    display_fill_rect(0, DET_CONTENT_Y_START, DISPLAY_WIDTH, DET_CONTENT_HEIGHT, UI_COLOR_BG);
+    if (data->exit_confirm_pending) {
+        ui_print_center(2, "Stop detector and exit?", UI_COLOR_TEXT);
+        ui_print_center(4, "Wait for JanOS stop ACK", UI_COLOR_DIMMED);
+        ui_draw_status("ENTER:Yes ESC/Q:No");
+        return;
+    }
     if (data->state == DET_SCAN_WAIT_ACK || data->state == DET_SCAN_RUNNING ||
         data->state == DET_SCAN_COLLECT) {
         draw_scan(data);
@@ -844,12 +867,21 @@ static void draw_screen(screen_t *self)
             ui_print_center(4, "Detector not confirmed", UI_COLOR_TEXT);
             ui_print_center(5, "R: fresh scan   A: all", UI_COLOR_DIMMED);
         }
-        ui_draw_status("ESC/Q: Stop and back");
+        ui_draw_status(data->state == DET_STOP_EXIT ?
+                       "Waiting for JanOS stop ACK" : "ESC/Q: Exit");
     }
     if (data->stop_send_failed) {
         ui_print(0, 6, data->message, UI_COLOR_HIGHLIGHT);
-        ui_draw_status("ESC/Q: Retry stop");
+        ui_draw_status("ESC/Q: Confirm exit");
     }
+}
+
+static void on_resume(screen_t *self)
+{
+    deauth_detector_data_t *data = self->user_data;
+    if (!data) return;
+    data->ui_initialized = false;
+    data->needs_redraw = true;
 }
 
 static void check_ping(deauth_detector_data_t *data, int64_t now)
@@ -857,6 +889,7 @@ static void check_ping(deauth_detector_data_t *data, int64_t now)
     if (data->state != DET_PICK && data->state != DET_ACTIVE_ALL &&
         data->state != DET_ACTIVE_SELECTED) return;
     if (data->ping_waiting && now - data->ping_sent_us >= PING_TIMEOUT_US) {
+        data->exit_confirm_pending = false;
         clear_scan(data);
         data->ping_waiting = false;
         set_state(data, DET_DISCONNECTED);
@@ -865,6 +898,7 @@ static void check_ping(deauth_detector_data_t *data, int64_t now)
     }
     if (!data->ping_waiting && now - data->last_ping_us >= PING_INTERVAL_US) {
         if (uart_send_command("ping") != 0) {
+            data->exit_confirm_pending = false;
             clear_scan(data);
             set_state(data, DET_DISCONNECTED);
             set_message(data, "UART connection lost");
@@ -915,18 +949,30 @@ static void on_tick(screen_t *self)
 static void on_key(screen_t *self, key_code_t key)
 {
     deauth_detector_data_t *data = self->user_data;
-    if (!data) return;
+    if (!data || data->leaving) return;
+    if (data->exit_confirm_pending) {
+        if (key == KEY_ESC || key == KEY_Q) {
+            data->exit_confirm_pending = false;
+            data->needs_redraw = true;
+        } else if (key == KEY_ENTER) {
+            data->exit_confirm_pending = false;
+            data->needs_redraw = true;
+            if (data->state == DET_STOP_FOR_SCAN ||
+                data->state == DET_STOP_FOR_ALL ||
+                data->state == DET_STOP_BAD_WATCH) {
+                /* Reuse the pending stop and its original timeout. */
+                data->state = DET_STOP_EXIT;
+                set_message(data, "Waiting for JanOS stop");
+            } else if (data->state != DET_STOP_EXIT) {
+                stop_then(data, DET_STOP_EXIT);
+            }
+        }
+        return;
+    }
     if (key == KEY_ESC || key == KEY_Q) {
-        if (data->state == DET_PICK || data->state == DET_DISCONNECTED) {
-            data->leaving = true;
-            screen_manager_pop();
-        } else if (data->state == DET_STOP_FOR_SCAN ||
-                   data->state == DET_STOP_FOR_ALL ||
-                   data->state == DET_STOP_BAD_WATCH) {
-            set_state(data, DET_STOP_EXIT);
-            set_message(data, "Waiting for stop");
-        } else if (data->state != DET_STOP_EXIT) {
-            stop_then(data, DET_STOP_EXIT);
+        if (data->state != DET_STOP_EXIT) {
+            data->exit_confirm_pending = true;
+            data->needs_redraw = true;
         }
         return;
     }
@@ -1004,6 +1050,7 @@ screen_t *deauth_detector_screen_create(void *params)
     }
     screen->user_data = data;
     screen->on_draw = draw_screen;
+    screen->on_resume = on_resume;
     screen->on_tick = on_tick;
     screen->on_key = on_key;
     screen->on_destroy = on_destroy;

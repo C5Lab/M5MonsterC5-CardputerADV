@@ -13,7 +13,8 @@ typedef enum { KEY_ESC, KEY_Q, KEY_S, KEY_A, KEY_C, KEY_W, KEY_R,
  KEY_UP, KEY_DOWN, KEY_SPACE, KEY_ENTER } key_code_t;
 typedef struct screen screen_t;
 struct screen { void *user_data; void (*on_key)(screen_t*, key_code_t);
- void (*on_destroy)(screen_t*); void (*on_draw)(screen_t*); void (*on_tick)(screen_t*); };
+ void (*on_destroy)(screen_t*); void (*on_resume)(screen_t*);
+ void (*on_draw)(screen_t*); void (*on_tick)(screen_t*); };
 screen_t *screen_alloc(void);
 void screen_manager_pop(void);
 """,
@@ -23,6 +24,9 @@ void uart_register_line_callback(void (*callback)(const char*, void*), void *dat
 void uart_clear_line_callback(void);
 """,
     "text_ui.h": """#pragma once
+#include <stdint.h>
+#define DISPLAY_WIDTH 240
+#define UI_COLOR_BG 0
 #define UI_COLOR_TEXT 1
 #define UI_COLOR_HIGHLIGHT 2
 #define UI_COLOR_DIMMED 3
@@ -32,6 +36,7 @@ void ui_print(int x, int y, const char *s, int color);
 void ui_print_center(int y, const char *s, int color);
 void ui_draw_status(const char *s);
 void ui_draw_progress(int row, int progress, const char *text);
+void display_fill_rect(int x, int y, int w, int h, uint16_t color);
 """,
     "esp_log.h": "#pragma once\n#define ESP_LOGI(tag, ...) ((void)(tag))\n",
     "esp_timer.h": "#pragma once\n#include <stdint.h>\nint64_t esp_timer_get_time(void);\n",
