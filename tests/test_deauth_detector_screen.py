@@ -26,6 +26,7 @@ void uart_clear_line_callback(void);
     "text_ui.h": """#pragma once
 #include <stdint.h>
 #define DISPLAY_WIDTH 240
+#define UI_COLS 30
 #define UI_COLOR_BG 0
 #define UI_COLOR_TEXT 1
 #define UI_COLOR_HIGHLIGHT 2
@@ -44,7 +45,7 @@ void display_fill_rect(int x, int y, int w, int h, uint16_t color);
 
 
 class DeauthDetectorTests(unittest.TestCase):
-    def test_uart_records(self):
+    def test_uart_and_trace_contract(self):
         with tempfile.TemporaryDirectory(prefix="deauth-host-") as temporary:
             directory = Path(temporary)
             for name, contents in STUBS.items():
@@ -59,7 +60,11 @@ class DeauthDetectorTests(unittest.TestCase):
                 str(ROOT / "tests/deauth_detector_screen_test.c"),
                 "-o", str(executable),
             ], check=True)
-            subprocess.run([str(executable)], check=True)
+            completed = subprocess.run(
+                [str(executable)], capture_output=True, text=True
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("ADV detector contract PASS", completed.stdout)
 
 
 if __name__ == "__main__":
