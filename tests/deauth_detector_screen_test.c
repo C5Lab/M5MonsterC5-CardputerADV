@@ -88,6 +88,8 @@ static screen_t *choice_screen(void)
     return deauth_detector_screen_create(NULL);
 }
 
+static void complete_scan_two(screen_t *screen);
+
 static screen_t *started_screen(bool trace)
 {
     int before = command_count;
@@ -95,15 +97,83 @@ static screen_t *started_screen(bool trace)
     assert(screen && rx_callback);
     assert(command_count == before);
     screen->on_draw(screen);
-    assert(ui_has("Trace") && ui_has("OFF") && ui_has("JanOS confirms"));
+    assert(ui_has("Passive"));
     if (trace) {
         key(screen, KEY_SPACE);
         screen->on_draw(screen);
-        assert(ui_has("Trace") && ui_has("ON"));
+        assert(ui_has("Trace"));
     }
     key(screen, KEY_ENTER);
     assert(command_count == before + 1);
     return screen;
+}
+
+static void defence_mode_command_contract(void)
+{
+    int before = command_count;
+    screen_t *screen = choice_screen();
+    screen->on_draw(screen);
+    assert(ui_has("Passive"));
+
+    key(screen, KEY_SPACE);
+    screen->on_draw(screen);
+    assert(ui_has("Trace"));
+
+    key(screen, KEY_SPACE);
+    screen->on_draw(screen);
+    assert(ui_has("Defence") && !ui_has("PMKID Lab"));
+    key(screen, KEY_ENTER);
+    assert(command_count == before + 1);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    rx("All operations stopped.");
+    assert(strcmp(commands[command_count - 1], "scan_networks") == 0);
+    complete_scan_two(screen);
+
+    /* Active Defence never offers an all-network start and cannot run with
+       an empty selected-BSSID set. */
+    before = command_count;
+    key(screen, KEY_A);
+    key(screen, KEY_ENTER);
+    assert(command_count == before);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    assert(strcmp(commands[command_count - 1],
+                  "deauth_detector_v2 --only 1 trace defence") == 0);
+    assert(strstr(commands[command_count - 1], "--trace") == NULL);
+    close_screen(screen);
+
+    before = command_count;
+    screen = choice_screen();
+    key(screen, KEY_SPACE);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_SPACE);
+    screen->on_draw(screen);
+    assert(ui_has("Defence + PMKID Lab"));
+
+    /* The first Enter opens a distinct warning. Only explicit confirmation
+       may begin the Stop -> fresh scan flow. */
+    key(screen, KEY_ENTER);
+    assert(command_count == before);
+    screen->on_draw(screen);
+    assert(ui_has("PMKID") && ui_has("legitimate client"));
+    key(screen, KEY_ESC);
+    screen->on_draw(screen);
+    assert(ui_has("Defence + PMKID Lab"));
+    assert(command_count == before);
+    key(screen, KEY_ENTER);
+    screen->on_draw(screen);
+    assert(ui_has("PMKID") && ui_has("legitimate client"));
+    key(screen, KEY_ENTER);
+    assert(command_count == before + 1);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    rx("All operations stopped.");
+    assert(strcmp(commands[command_count - 1], "scan_networks") == 0);
+    complete_scan_two(screen);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    assert(strcmp(commands[command_count - 1],
+                  "deauth_detector_v2 --only 1 trace defence pmkid-decoy") == 0);
+    close_screen(screen);
 }
 
 /* Existing tests exercise the default-off path unless they explicitly call
@@ -284,6 +354,495 @@ static void complete_scan_two(screen_t *screen)
     assert(data->scan[0].index == 1 && data->scan[1].index == 2);
     assert(strcmp(data->scan[0].ssid, data->scan[1].ssid) == 0);
     assert(strcmp(data->scan[0].bssid, data->scan[1].bssid) != 0);
+}
+
+static screen_t *started_defence_screen(bool pmkid)
+{
+    screen_t *screen = choice_screen();
+    deauth_detector_data_t *data = screen->user_data;
+    key(screen, KEY_SPACE);
+    key(screen, KEY_SPACE);
+    if (pmkid) {
+        key(screen, KEY_SPACE);
+        key(screen, KEY_ENTER);
+    }
+    key(screen, KEY_ENTER);
+    assert(strcmp(commands[command_count - 1], "stop") == 0);
+    rx("All operations stopped.");
+    complete_scan_two(screen);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    assert(strcmp(commands[command_count - 1], pmkid ?
+                  "deauth_detector_v2 --only 1 trace defence pmkid-decoy" :
+                  "deauth_detector_v2 --only 1 trace defence") == 0);
+    /* Current JanOS arms Defence before its ordinary start/format lines and
+       does not emit DETECTOR_WATCH rows for an active Defence run. */
+    rx(pmkid ?
+       "[DETECTOR_DEFENCE] armed targets=1 trace=fast pmkid=decoy" :
+       "[DETECTOR_DEFENCE] armed targets=1 trace=fast pmkid=monitor");
+    rx("Deauth Detector started - monitoring selected channels for deauth frames...");
+    rx("[DETECTOR_INFO] format=deauth_v2");
+    assert(data->state == DET_ACTIVE_SELECTED);
+    return screen;
+}
+
+static void defence_multi_target_transaction_contract(void)
+{
+    screen_t *screen = choice_screen();
+    deauth_detector_data_t *data = screen->user_data;
+    key(screen, KEY_SPACE);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    rx("All operations stopped.");
+    complete_scan_two(screen);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_DOWN);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    assert(strcmp(commands[command_count - 1],
+                  "deauth_detector_v2 --only 1 2 trace defence") == 0);
+    rx("[DETECTOR_DEFENCE] armed targets=2 trace=fast pmkid=monitor");
+    rx("Deauth Detector started - monitoring selected channels for deauth frames...");
+    rx("[DETECTOR_INFO] format=deauth_v2");
+    assert(data->state == DET_ACTIVE_SELECTED);
+
+    rx("[DETECTOR_DEFENCE] trigger=deauth BSSID=02:00:00:00:00:01 STA=- RX=6 decision=decoy_4way reason=unprotected");
+    rx("[DETECTOR_DEFENCE] provisional_bssid=02:00:00:00:00:02 channel=11");
+    screen->on_draw(screen);
+    assert(ui_has("Responding") && strcmp(data->defence_bssid, "02:00:00:00:00:01") == 0);
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=2 latency_us=80 error=none");
+    assert(data->defence_responses == 1);
+
+    /* JanOS suppresses later eligible observations after a success until the
+       served BSSID is explicitly released. */
+    rx("[DETECTOR_DEFENCE] trigger=disassoc BSSID=02:00:00:00:00:02 STA=- RX=11 decision=decoy_4way reason=unprotected");
+    rx("[DETECTOR_DEFENCE] provisional_bssid=02:00:00:00:00:02 channel=11");
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=2 latency_us=90 error=none");
+    assert(data->defence_responses == 1);
+    assert(strcmp(data->defence_bssid, "02:00:00:00:00:01") == 0);
+
+    rx("[DETECTOR_DEFENCE] released_bssid=02:00:00:00:00:01 channel=6 reason=idle idle_ms=20000 response=decoy_4way suppressed=1");
+    rx("[DETECTOR_DEFENCE] trigger=disassoc BSSID=02:00:00:00:00:02 STA=- RX=11 decision=decoy_4way reason=unprotected");
+    rx("[DETECTOR_DEFENCE] provisional_bssid=02:00:00:00:00:02 channel=11");
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=2 latency_us=90 error=none");
+    assert(data->defence_responses == 2);
+    assert(strcmp(data->defence_bssid, "02:00:00:00:00:02") == 0);
+    close_screen(screen);
+}
+
+static void defence_status_contract(void)
+{
+    screen_t *screen = started_defence_screen(false);
+    deauth_detector_data_t *data = screen->user_data;
+    screen->on_draw(screen);
+    assert(ui_has("Defence armed"));
+    int commands_before_all = command_count;
+    key(screen, KEY_A);
+    assert(command_count == commands_before_all);
+    assert(data->state == DET_ACTIVE_SELECTED);
+    int deauth_before = data->deauth_count;
+    int csa_before = data->csa_count;
+
+    /* Repeated, malformed, or mode-mismatched arm records are harmless. */
+    rx("noise [DETECTOR_DEFENCE] armed targets=1 trace=fast pmkid=monitor");
+    rx(">>[DETECTOR_DEFENCE] armed targets=1 trace=fast pmkid=monitor");
+    rx("[DETECTOR_DEFENCE] armed targets=2 trace=fast pmkid=monitor");
+    rx("[DETECTOR_DEFENCE] armed targets=1 trace=fast pmkid=decoy");
+    rx("[DETECTOR_DEFENCE] armed targets=1 trace=fast pmkid=monitor extra");
+    screen->on_draw(screen);
+    assert(ui_has("Defence armed"));
+    assert(data->deauth_count == deauth_before && data->csa_count == csa_before);
+
+    rx("[DETECTOR_DEFENCE] released_bssid=02:00:00:00:00:01 channel=6 reason=idle idle_ms=20000 response=decoy_4way suppressed=9");
+    screen->on_draw(screen);
+    assert(ui_has("Defence armed") && ui_has("Responses 0"));
+
+    /* PMKID response telemetry is ineligible unless PMKID Lab was explicitly
+       confirmed for this session. */
+    rx("[DETECTOR_DEFENCE] trigger=pmkid_probe BSSID=02:00:00:00:00:01 STA=02:00:00:00:00:05 RX=6 decision=decoy_pmkid reason=eligible");
+    rx("[DETECTOR_DEFENCE] tx=decoy_pmkid stage=m1_pmkid result=ok frames=1 latency_us=44 error=none");
+    screen->on_draw(screen);
+    assert(ui_has("Defence armed") && ui_has("Responses 0"));
+    rx("[DETECTOR_DEFENCE] trigger=deauth BSSID=02:00:00:00:00:99 STA=- RX=6 decision=decoy_4way reason=unprotected");
+    screen->on_draw(screen);
+    assert(ui_has("Defence armed") && !ui_has("Responding"));
+
+    rx("[DETECTOR_DEFENCE] trigger=deauth BSSID=02:00:00:00:00:01 STA=- RX=6 decision=decoy_4way reason=unprotected");
+    screen->on_draw(screen);
+    assert(ui_has("Responding") && ui_has("Responses 0"));
+    rx("[DETECTOR_DEFENCE] provisional_bssid=02:00:00:00:00:01 channel=6");
+    screen->on_draw(screen);
+    assert(ui_has("Provisional CH6") && ui_has("Responses 0"));
+
+    /* Invalid or out-of-order TX records are consumed without a success. */
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=3 latency_us=80 error=none");
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_pmkid result=ok frames=2 latency_us=80 error=none");
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=2 latency_us=18446744073709551616 error=none");
+    screen->on_draw(screen);
+    assert(ui_has("Provisional CH6") && ui_has("Responses 0"));
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=error frames=1 latency_us=80 error=ESP_ERR_INVALID_STATE");
+    screen->on_draw(screen);
+    assert(ui_has("Response error") && ui_has("Responses 0"));
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=2 latency_us=81 error=none");
+    screen->on_draw(screen);
+    assert(ui_has("Response error") && ui_has("Responses 0"));
+
+    rx("[DETECTOR_DEFENCE] trigger=disassoc BSSID=02:00:00:00:00:01 STA=02:00:00:00:00:05 RX=6 decision=decoy_4way reason=unprotected");
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=2 latency_us=81 error=none");
+    screen->on_draw(screen);
+    assert(ui_has("Response OK") && ui_has("Responses 1"));
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=2 latency_us=81 error=none");
+    screen->on_draw(screen);
+    assert(ui_has("Responses 1"));
+    rx("[DETECTOR_DEFENCE] provisional_bssid=02:00:00:00:00:01 channel=6");
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=2 latency_us=82 error=none");
+    screen->on_draw(screen);
+    assert(ui_has("Response OK") && ui_has("Responses 1"));
+
+    /* V2, Trace, CSA, and Defence stay independent when interleaved. */
+    rx("[DETECTOR_TRACE] locked_channel=6");
+    rx("[DEAUTH_V2] CH: 6 | BSSID: 02:00:00:00:00:01 | TX: 02:00:00:00:00:03 | DA: FF:FF:FF:FF:FF:FF | RSSI: -40 | REASON: 7 | SSID: Home");
+    rx("[CSA] RX: 6 | TO: 11 | BSSID: 02:00:00:00:00:01 | TX: 02:00:00:00:00:03 | RSSI: -48 | VIA: beacon | COUNT: 3 | MODE: 0 | CLASS: - | SSID: Home");
+    assert(data->trace_status == TRACE_STATUS_LOCKED && data->trace_channel == 6);
+    assert(data->deauth_count == deauth_before + 1 && data->csa_count == csa_before + 1);
+    screen->on_draw(screen);
+    assert(ui_has("Response OK") && ui_has("Responses 1"));
+
+    rx("[DETECTOR_DEFENCE] suppressed=4 reason=rate-limit BSSID=02:00:00:00:00:01 window_ms=1000");
+    screen->on_draw(screen);
+    assert(ui_has("Sup4") && ui_has("Trace") && ui_has("CH6"));
+    rx("[DETECTOR_DEFENCE] released_bssid=02:00:00:00:00:01 channel=6 reason=idle idle_ms=20000 response=decoy_4way suppressed=4");
+    screen->on_draw(screen);
+    assert(ui_has("Released/rearmed") && ui_has("Sup4"));
+    data->deauth_count = INT_MAX;
+    data->csa_count = INT_MAX;
+    data->defence_suppressed = UINT_MAX;
+    data->trace_status = TRACE_STATUS_RELEASED;
+    data->trace_channel = 255;
+    screen->on_draw(screen);
+    assert(ui_has("Trace rearmed CH255") && ui_has("Sup9999+"));
+    for (int row = 0; row <= 7; ++row) assert(strlen(rows[row]) <= 30);
+
+    /* Stop telemetry is a summary, not final cleanup. Only the exact global
+       acknowledgement clears the remote Defence/Trace context. */
+    key(screen, KEY_S);
+    rx("[DETECTOR_DEFENCE] stopped observations=3 tx_pairs=1 pmkid_m1=0 responses=4294967295 satisfied=2 errors=0 dropped=0 outcome=responded");
+    rx("Deauth Detector stopped.");
+    screen->on_draw(screen);
+    assert(ui_has("4294967295") && ui_has("Responses 1"));
+    for (int row = 0; row <= 7; ++row) assert(strlen(rows[row]) <= 30);
+    rx("All operations stopped. trailing");
+    screen->on_draw(screen);
+    assert(ui_has("4294967295") && ui_has("Responses 1"));
+    rx("All operations stopped.");
+    assert(data->state == DET_SCAN_WAIT_ACK);
+    assert(data->trace_status == TRACE_STATUS_OFF);
+    close_screen(screen);
+
+    /* Defence never silently degrades to a passive legacy detector. */
+    screen = choice_screen();
+    key(screen, KEY_SPACE);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    rx("All operations stopped.");
+    complete_scan_two(screen);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    int commands_before_reject = command_count;
+    rx("Unrecognized command");
+    assert(command_count == commands_before_reject);
+    screen->on_draw(screen);
+    assert(ui_has("Defence unsupported"));
+    close_screen(screen);
+
+    /* PMKID Lab has a distinct arm proof and response type. */
+    screen = started_defence_screen(true);
+    data = screen->user_data;
+    rx("[DETECTOR_DEFENCE] armed targets=1 trace=fast pmkid=monitor");
+    screen->on_draw(screen);
+    assert(ui_has("Defence armed"));
+    rx("[DETECTOR_DEFENCE] armed targets=1 trace=fast pmkid=decoy");
+    rx("[DETECTOR_DEFENCE] trigger=pmkid_probe BSSID=02:00:00:00:00:01 STA=02:00:00:00:00:05 RX=6 decision=decoy_pmkid reason=eligible");
+    rx("[DETECTOR_DEFENCE] tx=decoy_pmkid stage=m1_pmkid result=ok frames=1 latency_us=44 error=none");
+    screen->on_draw(screen);
+    assert(ui_has("Response OK") && ui_has("Responses 1"));
+    close_screen(screen);
+
+    /* A Stop timeout preserves the last confirmed remote context and makes
+       the uncertainty visible until an exact final acknowledgement arrives. */
+    screen = started_defence_screen(false);
+    data = screen->user_data;
+    rx("[DETECTOR_DEFENCE] armed targets=1 trace=fast pmkid=monitor");
+    rx("[DETECTOR_DEFENCE] trigger=deauth BSSID=02:00:00:00:00:01 STA=- RX=6 decision=decoy_4way reason=unprotected");
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=2 latency_us=80 error=none");
+    key(screen, KEY_S);
+    tick(screen, 36000);
+    assert(data->state == DET_ERROR && data->stop_pending);
+    screen->on_draw(screen);
+    assert(ui_has("No JanOS stop response") && ui_has("Responses 1") &&
+           ui_has("Trace"));
+    rx("All operations stopped.");
+    assert(!data->stop_pending);
+    close_screen(screen);
+}
+
+static void forensics_contract(void)
+{
+    screen_t *screen = deauth_detector_screen_create(NULL);
+    deauth_detector_data_t *data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    rx("[DETECTOR_INFO] format=deauth_v2");
+    assert(data->state == DET_ACTIVE_ALL);
+
+    /* Absence of the optional marker is a supported compatibility state. */
+    key(screen, KEY_W);
+    screen->on_draw(screen);
+    assert(strcmp(rows[0], "FORENSICS v1") == 0);
+    assert(ui_has("Forensics unavailable"));
+    key(screen, KEY_W);
+    int deauth_before = data->deauth_count;
+    int csa_before = data->csa_count;
+
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-87 REASON=0 SEQ=100 RETRY=0 PROTECTED=0 FC=0x0000 TS_US=0");
+    key(screen, KEY_W);
+    screen->on_draw(screen);
+    assert(ui_has("Rows 1") && ui_has("Bursts 1"));
+    assert(ui_has("RSSI -87/-87/-87"));
+    assert(ui_has("insufficient sequence data"));
+    assert(ui_has("Unprot 1") && ui_has("Retry 0"));
+
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=233 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-84 REASON=65535 SEQ=102 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=20000000");
+    screen->on_draw(screen);
+    assert(ui_has("Seq 102 d+2 R0"));
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-80 REASON=7 SEQ=102 RETRY=1 PROTECTED=0 FC=0x08C0 TS_US=40000000");
+    screen->on_draw(screen);
+    assert(ui_has("retransmission"));
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-83 REASON=7 SEQ=102 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=60000001");
+    screen->on_draw(screen);
+    assert(ui_has("repeated sequence"));
+    rx("[DEAUTH_FORENSIC/1] FRAME=disassoc CH=233 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=02:00:00:00:00:05 RSSI=0 REASON=65535 SEQ=4095 RETRY=0 PROTECTED=1 FC=0xFFFF TS_US=60000002");
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=- BSSID=02:00:00:00:00:02 TX=02:00:00:00:00:04 DA=FF:FF:FF:FF:FF:FF RSSI=- REASON=- SEQ=- RETRY=- PROTECTED=- FC=- TS_US=60000003");
+    screen->on_draw(screen);
+    assert(ui_has("Rows 6") && ui_has("Bursts 4") && ui_has("Largest 3"));
+    assert(ui_has("RSSI -87/-67/0"));
+    assert(ui_has("Prot 1") && ui_has("Unprot 4") && ui_has("Unknown 7"));
+    assert(ui_has("insufficient sequence data"));
+
+    /* Reordered, missing, duplicated, extra, embedded, overflowed, and
+       out-of-range fields remain status-like noise, never observations. */
+    const char *invalid[] = {
+        "[DEAUTH_FORENSIC/1] CH=1 FRAME=deauth BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 REASON=8 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7 EXTRA=1",
+        "[DEAUTH_FORENSIC/1] FRAME=bad CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=234 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=bad TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-128 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=65536 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=4096 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=2 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=2 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x10000 TS_US=7",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=18446744073709551616",
+        ">>[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "noise [DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7",
+        "[DEAUTH_FORENSIC/10] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=7"
+    };
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) rx(invalid[i]);
+    rx("> [DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:02 TX=02:00:00:00:00:04 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=60000004");
+    screen->on_draw(screen);
+    assert(ui_has("Rows 7"));
+    assert(data->deauth_count == deauth_before && data->csa_count == csa_before);
+    assert(data->forensic.unique_bssids == 2 && data->forensic.unique_das == 2);
+    assert(data->forensic.reason_count == 3);
+    unsigned reason_7_count = 0;
+    for (unsigned i = 0; i < data->forensic.reason_count; ++i) {
+        if (data->forensic.reasons[i].reason == 7) {
+            reason_7_count = data->forensic.reasons[i].count;
+        }
+    }
+    assert(reason_7_count == 3);
+    for (int row = 0; row <= 7; ++row) assert(strlen(rows[row]) <= 30);
+    close_screen(screen);
+
+    /* Boundary-valid evidence includes the full uint64 timestamp, minimum
+       RSSI, and 12-bit sequence wrap on the same stream. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    rx("[DETECTOR_INFO] format=deauth_v2");
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=1 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-127 REASON=0 SEQ=4095 RETRY=0 PROTECTED=0 FC=0x0000 TS_US=18446744073709551614");
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=233 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=0 REASON=65535 SEQ=0 RETRY=0 PROTECTED=1 FC=0xFFFF TS_US=18446744073709551615");
+    key(screen, KEY_W);
+    screen->on_draw(screen);
+    assert(ui_has("Rows 2") && ui_has("Bursts 1"));
+    assert(ui_has("RSSI -127/-64/0") && ui_has("Seq 0 d+1 R0"));
+    close_screen(screen);
+
+    /* Every optional dash contributes explicit unknown evidence, including a
+       missing RSSI sample alongside known samples. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    rx("[DETECTOR_INFO] format=deauth_v2");
+    const char *isolated_unknowns[] = {
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=- BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=1",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=- REASON=7 SEQ=2 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=2",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=- SEQ=3 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=3",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=- RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=4",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=5 RETRY=- PROTECTED=0 FC=0x00C0 TS_US=5",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=6 RETRY=0 PROTECTED=- FC=0x00C0 TS_US=6",
+        "[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=7 RETRY=0 PROTECTED=0 FC=- TS_US=7"
+    };
+    for (size_t i = 0; i < sizeof(isolated_unknowns) / sizeof(isolated_unknowns[0]); ++i) {
+        rx(isolated_unknowns[i]);
+    }
+    key(screen, KEY_W);
+    screen->on_draw(screen);
+    assert(ui_has("Unknown 7"));
+    assert(ui_has("RSSI -40/-40/-40 ?1"));
+    close_screen(screen);
+
+    /* Detail storage is fixed at 16 rows; accepted totals and burst summary
+       continue while evictions increment the visible local drop count. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    rx("[DETECTOR_INFO] format=deauth_v2");
+    char fixture[320];
+    for (int i = 0; i < 20; ++i) {
+        snprintf(fixture, sizeof(fixture),
+                 "[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=%d RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=%d000000",
+                 i, i);
+        rx(fixture);
+    }
+    key(screen, KEY_W);
+    screen->on_draw(screen);
+    assert(ui_has("Rows 20") && ui_has("Bursts 1"));
+    assert(ui_has("Largest 20") && ui_has("Drop 4"));
+    key(screen, KEY_S);
+    screen->on_draw(screen);
+    assert(ui_has("Stop ACK pending") && ui_has("Remote state unknown") &&
+           ui_has("Rows 20"));
+    rx("All operations stopped.");
+    complete_scan_two(screen);
+    key(screen, KEY_W);
+    screen->on_draw(screen);
+    assert(ui_has("FORENSICS SUMMARY") && ui_has("Evidence only"));
+    assert(ui_has("Rows 20") && ui_has("Bursts 1") && ui_has("Largest 20"));
+    assert(ui_has("Drop 4") && ui_has("RSSI -40/-40/-40"));
+    assert(ui_has("Prot 0") && ui_has("Unprot 20") && ui_has("Retry 0"));
+    int summary_command_count = command_count;
+    key(screen, KEY_A);
+    key(screen, KEY_R);
+    assert(data->state == DET_PICK && data->view == VIEW_FORENSICS);
+    assert(command_count == summary_command_count);
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-30 REASON=7 SEQ=55 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=99999999");
+    screen->on_draw(screen);
+    assert(ui_has("Rows 20"));
+
+    /* A new session resets only after its ordinary start proofs. A late row
+       received while the selected start is pending cannot enter it. */
+    key(screen, KEY_W);
+    key(screen, KEY_SPACE);
+    key(screen, KEY_ENTER);
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-20 REASON=7 SEQ=77 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=100000000");
+    rx("Deauth Detector started - monitoring selected channels for deauth frames...");
+    rx("[DETECTOR_INFO] format=deauth_v2");
+    rx("[DETECTOR_WATCH] count=1 ap=1/1 CH=6 BSSID=02:00:00:00:00:01 SSID=Home (upstairs)");
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-20 REASON=7 SEQ=78 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=100000001");
+    key(screen, KEY_W);
+    key(screen, KEY_W);
+    screen->on_draw(screen);
+    assert(ui_has("Rows 1") && ui_has("Bursts 1"));
+    close_screen(screen);
+
+    /* Timeout retains the evidence and exposes remote-state uncertainty until
+       the exact final acknowledgement finalizes the summary. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    rx("[DETECTOR_INFO] format=deauth_v2");
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-45 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=1");
+    key(screen, KEY_W);
+    key(screen, KEY_S);
+    tick(screen, 36000);
+    screen->on_draw(screen);
+    assert(data->state == DET_ERROR && data->stop_pending);
+    assert(ui_has("No JanOS stop response") && ui_has("Remote state unknown"));
+    assert(ui_has("Rows 1"));
+    rx("All operations stopped.");
+    screen->on_draw(screen);
+    assert(ui_has("FORENSICS SUMMARY") && ui_has("Evidence only"));
+    close_screen(screen);
+
+    /* Defence remains fully functional when its firmware emits no forensic
+       marker at all. */
+    screen = started_defence_screen(false);
+    data = screen->user_data;
+    rx("[DETECTOR_TRACE] locked_channel=6");
+    rx("[DETECTOR_DEFENCE] trigger=deauth BSSID=02:00:00:00:00:01 STA=- RX=6 decision=decoy_4way reason=unprotected");
+    rx("[DETECTOR_DEFENCE] tx=decoy_4way stage=m1_m2 result=ok frames=2 latency_us=50 error=none");
+    rx("[DEAUTH_V2] CH: 6 | BSSID: 02:00:00:00:00:01 | TX: 02:00:00:00:00:03 | DA: FF:FF:FF:FF:FF:FF | RSSI: -40 | REASON: 7 | SSID: Home");
+    rx("[CSA] RX: 6 | TO: 11 | BSSID: 02:00:00:00:00:01 | TX: 02:00:00:00:00:03 | RSSI: -48 | VIA: beacon | COUNT: 3 | MODE: 0 | CLASS: - | SSID: Home");
+    assert(data->trace_status == TRACE_STATUS_LOCKED && data->trace_channel == 6);
+    assert(data->defence_responses == 1 && data->deauth_count == 1 && data->csa_count == 1);
+    key(screen, KEY_W);
+    key(screen, KEY_W);
+    screen->on_draw(screen);
+    assert(ui_has("Forensics unavailable") && ui_has("FORENSICS v1"));
+    assert(data->defence_status == DEFENCE_STATUS_RESPONSE_OK);
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=1");
+    screen->on_draw(screen);
+    assert(ui_has("Rows 1") && data->defence_responses == 1 &&
+           data->deauth_count == 1 && data->csa_count == 1);
+    close_screen(screen);
+
+    /* Connection loss preserves the accepted evidence but closes ingestion. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    rx("[DETECTOR_INFO] format=deauth_v2");
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-45 REASON=7 SEQ=1 RETRY=0 PROTECTED=0 FC=0x00C0 TS_US=1");
+    key(screen, KEY_W);
+    tick(screen, 11000);
+    tick(screen, 6000);
+    assert(data->state == DET_DISCONNECTED);
+    screen->on_draw(screen);
+    assert(ui_has("Rows 1") && ui_has("JanOS connection lost") &&
+           ui_has("Remote state unknown"));
+    close_screen(screen);
+
+    /* Every externally visible counter saturates instead of wrapping. */
+    screen = deauth_detector_screen_create(NULL);
+    data = screen->user_data;
+    rx("Deauth Detector started - scanning all channels for deauth frames...");
+    rx("[DETECTOR_INFO] format=deauth_v2");
+    for (int i = 0; i < FORENSIC_DETAIL_LIMIT; ++i) {
+        snprintf(fixture, sizeof(fixture),
+                 "[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=%d RETRY=0 PROTECTED=1 FC=0x00C0 TS_US=%d000000",
+                 i, i);
+        rx(fixture);
+    }
+    data->forensic.accepted = UINT_MAX;
+    data->forensic.dropped = UINT_MAX;
+    data->forensic.bursts = UINT_MAX;
+    data->forensic.largest_burst = UINT_MAX;
+    data->forensic.current_burst = UINT_MAX;
+    data->forensic.protected_count = UINT_MAX;
+    data->forensic.retry_count = UINT_MAX;
+    data->forensic.repeated_sequences = UINT_MAX;
+    rx("[DEAUTH_FORENSIC/1] FRAME=deauth CH=6 BSSID=02:00:00:00:00:01 TX=02:00:00:00:00:03 DA=FF:FF:FF:FF:FF:FF RSSI=-40 REASON=7 SEQ=15 RETRY=1 PROTECTED=1 FC=0x08C0 TS_US=16000000");
+    assert(data->forensic.accepted == UINT_MAX && data->forensic.dropped == UINT_MAX);
+    assert(data->forensic.bursts == UINT_MAX && data->forensic.largest_burst == UINT_MAX);
+    assert(data->forensic.protected_count == UINT_MAX && data->forensic.retry_count == UINT_MAX);
+    assert(data->forensic.repeated_sequences == UINT_MAX);
+    key(screen, KEY_W);
+    screen->on_draw(screen);
+    assert(ui_has("Rows 9999+") && ui_has("Bursts 9999+") && ui_has("Drop 9999+"));
+    for (int row = 0; row <= 7; ++row) assert(strlen(rows[row]) <= 30);
+    close_screen(screen);
 }
 
 static void v2_selected_records(void)
@@ -522,7 +1081,7 @@ static void trace_mode_contract(void)
     screen_t *screen = choice_screen();
     assert(command_count == before);
     screen->on_draw(screen);
-    assert(ui_has("Trace") && ui_has("OFF"));
+    assert(ui_has("Passive"));
     key(screen, KEY_Q);
     assert(command_count == before && pops == popped + 1);
     close_screen(screen);
@@ -1378,6 +1937,10 @@ int main(void)
     trace_legacy_marker_compatibility();
     trace_idle_release_contract();
     trace_mode_contract();
+    defence_mode_command_contract();
+    defence_status_contract();
+    defence_multi_target_transaction_contract();
+    forensics_contract();
     puts("ADV detector contract PASS");
     return 0;
 }

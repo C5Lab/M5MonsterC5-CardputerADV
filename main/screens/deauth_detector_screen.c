@@ -1,10 +1,9 @@
 /**
  * @file deauth_detector_screen.c
- * @brief Passive JanOS DEAUTH and CSA detector on the Cardputer UART.
+ * @brief JanOS DEAUTH, Trace, and Defence controller on the Cardputer UART.
  *
- * The user chooses whether optional trace mode is enabled before the first
- * all-channel V2 command. Press S to stop it and make a fresh JanOS scan for
- * an exact BSSID watch list.
+ * The user chooses Passive, Trace, Defence, or Defence + PMKID Lab. Active
+ * Defence always uses a fresh JanOS scan and an exact local BSSID selection.
  */
 
 #include "deauth_detector_screen.h"
@@ -15,6 +14,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,9 +32,13 @@ static const char *TAG = "DEAUTH_DETECTOR";
 #define DET_CONTENT_Y_START 19
 #define DET_CONTENT_Y_END 117
 #define DET_CONTENT_HEIGHT (DET_CONTENT_Y_END - DET_CONTENT_Y_START)
+#define FORENSIC_DETAIL_LIMIT 16
+#define FORENSIC_REASON_LIMIT 16
+#define FORENSIC_BURST_GAP_US 20000000ULL
 
 typedef enum {
     DET_TRACE_CHOICE,
+    DET_PMKID_WARNING,
     DET_START_ALL,
     DET_ACTIVE_ALL,
     DET_STOP_FOR_SCAN,
@@ -52,9 +56,18 @@ typedef enum {
 } detector_state_t;
 
 typedef enum {
+    DET_MODE_PASSIVE,
+    DET_MODE_TRACE,
+    DET_MODE_DEFENCE,
+    DET_MODE_DEFENCE_PMKID,
+    DET_MODE_COUNT
+} detector_mode_t;
+
+typedef enum {
     VIEW_DEAUTH,
     VIEW_CSA,
-    VIEW_WATCH
+    VIEW_WATCH,
+    VIEW_FORENSICS
 } detector_view_t;
 
 typedef enum {
@@ -67,6 +80,19 @@ typedef enum {
     TRACE_STATUS_TUNE_FAILED,
     TRACE_STATUS_UNAVAILABLE
 } detector_trace_status_t;
+
+typedef enum {
+    DEFENCE_STATUS_OFF,
+    DEFENCE_STATUS_WAITING,
+    DEFENCE_STATUS_ARMED,
+    DEFENCE_STATUS_PROVISIONAL,
+    DEFENCE_STATUS_RESPONDING,
+    DEFENCE_STATUS_RESPONSE_OK,
+    DEFENCE_STATUS_RESPONSE_ERROR,
+    DEFENCE_STATUS_RELEASED,
+    DEFENCE_STATUS_STOPPED,
+    DEFENCE_STATUS_UNSUPPORTED
+} detector_defence_status_t;
 
 typedef struct {
     int index;
@@ -101,6 +127,81 @@ typedef struct {
     char ssid[33];
 } csa_event_t;
 
+typedef enum {
+    FORENSIC_FRAME_DEAUTH,
+    FORENSIC_FRAME_DISASSOC
+} forensic_frame_t;
+
+typedef enum {
+    FORENSIC_SEQ_INSUFFICIENT,
+    FORENSIC_SEQ_DELTA,
+    FORENSIC_SEQ_RETRANSMISSION,
+    FORENSIC_SEQ_REPEATED
+} forensic_sequence_state_t;
+
+typedef struct {
+    forensic_frame_t frame;
+    bool channel_known;
+    int channel;
+    char bssid[18];
+    char tx[18];
+    char da[18];
+    bool rssi_known;
+    int rssi;
+    bool reason_known;
+    unsigned reason;
+    bool sequence_known;
+    unsigned sequence;
+    bool retry_known;
+    unsigned retry;
+    bool protected_known;
+    unsigned protected_frame;
+    bool fc_known;
+    unsigned fc;
+    uint64_t ts_us;
+} forensic_row_t;
+
+typedef struct {
+    unsigned reason;
+    unsigned count;
+} forensic_reason_count_t;
+
+typedef struct {
+    forensic_row_t detail[FORENSIC_DETAIL_LIMIT];
+    unsigned detail_count;
+    unsigned accepted;
+    unsigned dropped;
+    unsigned unique_bssids;
+    unsigned unique_das;
+    unsigned bursts;
+    unsigned largest_burst;
+    unsigned current_burst;
+    unsigned protected_count;
+    unsigned unprotected_count;
+    unsigned retry_count;
+    /* Count every unavailable optional field, not just rows where retry or
+       protection is unknown. This keeps partial evidence visibly partial. */
+    unsigned unknown_count;
+    unsigned unknown_rssi;
+    unsigned repeated_sequences;
+    forensic_reason_count_t reasons[FORENSIC_REASON_LIMIT];
+    unsigned reason_count;
+    bool rssi_available;
+    int rssi_min;
+    int rssi_max;
+    int64_t rssi_sum;
+    unsigned rssi_samples;
+    bool last_burst_valid;
+    forensic_row_t last_burst_row;
+    forensic_sequence_state_t sequence_state;
+    bool latest_sequence_known;
+    unsigned latest_sequence;
+    unsigned latest_delta;
+    bool latest_retry_known;
+    unsigned latest_retry;
+    bool finalized;
+} forensic_session_t;
+
 typedef struct {
     detector_state_t state;
     detector_view_t view;
@@ -118,6 +219,7 @@ typedef struct {
     bool start_ack;
     bool v2_requested;
     bool v2_confirmed;
+    detector_mode_t mode;
     bool trace_enabled;
     detector_trace_status_t trace_status;
     char trace_bssid[18];
@@ -126,6 +228,20 @@ typedef struct {
     int trace_channel;
     int trace_idle_ms;
     char trace_error[32];
+    detector_defence_status_t defence_status;
+    char defence_bssid[18];
+    char defence_response[16];
+    char defence_error[32];
+    char defence_outcome[12];
+    int defence_channel;
+    unsigned defence_responses;
+    unsigned defence_suppressed;
+    unsigned defence_summary_responses;
+    bool defence_summary_valid;
+    bool defence_armed_latched;
+    bool defence_transaction_pending;
+    forensic_session_t forensic;
+    bool forensic_accepting;
     bool ping_waiting;
     bool exit_ready;
     bool exit_confirm_pending;
@@ -208,6 +324,40 @@ static void mark_trace_unavailable(deauth_detector_data_t *data)
 {
     clear_trace_status(data);
     data->trace_status = TRACE_STATUS_UNAVAILABLE;
+}
+
+static bool defence_requested(const deauth_detector_data_t *data)
+{
+    return data->mode >= DET_MODE_DEFENCE;
+}
+
+static void clear_defence_status(deauth_detector_data_t *data)
+{
+    data->defence_status = DEFENCE_STATUS_OFF;
+    data->defence_bssid[0] = '\0';
+    data->defence_response[0] = '\0';
+    data->defence_error[0] = '\0';
+    data->defence_outcome[0] = '\0';
+    data->defence_channel = 0;
+    data->defence_responses = 0;
+    data->defence_suppressed = 0;
+    data->defence_summary_responses = 0;
+    data->defence_summary_valid = false;
+    data->defence_armed_latched = false;
+    data->defence_transaction_pending = false;
+    data->needs_redraw = true;
+}
+
+static void begin_defence_run(deauth_detector_data_t *data)
+{
+    clear_defence_status(data);
+    if (defence_requested(data)) data->defence_status = DEFENCE_STATUS_WAITING;
+}
+
+static void mark_defence_unsupported(deauth_detector_data_t *data)
+{
+    clear_defence_status(data);
+    data->defence_status = DEFENCE_STATUS_UNSUPPORTED;
 }
 
 static bool bssid_valid(const char *bssid)
@@ -295,6 +445,431 @@ static bool parse_decimal_field(const char *field, bool negative, int *value)
 {
     const char *end = NULL;
     return parse_integer(field, negative, value, &end) && *end == '\0';
+}
+
+static bool parse_u64_field(const char *field, uint64_t *value)
+{
+    if (!field || !isdigit((unsigned char)*field)) return false;
+    errno = 0;
+    char *end = NULL;
+    unsigned long long parsed = strtoull(field, &end, 10);
+    if (errno == ERANGE || *end != '\0') return false;
+    *value = (uint64_t)parsed;
+    return true;
+}
+
+static bool parse_unsigned_field(const char *field, unsigned *value)
+{
+    uint64_t parsed = 0;
+    if (!parse_u64_field(field, &parsed) || parsed > UINT_MAX) return false;
+    *value = (unsigned)parsed;
+    return true;
+}
+
+static bool status_token_valid(const char *token)
+{
+    size_t length = token ? strlen(token) : 0;
+    if (length == 0 || length > 31) return false;
+    for (const unsigned char *ch = (const unsigned char *)token; *ch; ++ch) {
+        if (!isalnum(*ch) && *ch != '_' && *ch != '-' && *ch != '.') return false;
+    }
+    return true;
+}
+
+static bool mac_or_dash_valid(const char *value)
+{
+    return strcmp(value, "-") == 0 || bssid_valid(value);
+}
+
+static void increment_saturated(unsigned *value)
+{
+    if (*value < UINT_MAX) ++*value;
+}
+
+static void reset_forensic_session(deauth_detector_data_t *data)
+{
+    memset(&data->forensic, 0, sizeof(data->forensic));
+    data->forensic.sequence_state = FORENSIC_SEQ_INSUFFICIENT;
+    data->forensic_accepting = data->v2_requested;
+    data->needs_redraw = true;
+}
+
+static bool forensic_same_stream(const forensic_row_t *a,
+                                 const forensic_row_t *b)
+{
+    return a->frame == b->frame && bssid_equal(a->bssid, b->bssid) &&
+           bssid_equal(a->tx, b->tx) && bssid_equal(a->da, b->da);
+}
+
+static void recalculate_forensic_bounded_counts(forensic_session_t *session)
+{
+    session->unique_bssids = 0;
+    session->unique_das = 0;
+    session->reason_count = 0;
+    memset(session->reasons, 0, sizeof(session->reasons));
+    for (unsigned i = 0; i < session->detail_count; ++i) {
+        bool bssid_seen = false;
+        bool da_seen = false;
+        for (unsigned j = 0; j < i; ++j) {
+            if (bssid_equal(session->detail[i].bssid, session->detail[j].bssid)) {
+                bssid_seen = true;
+            }
+            if (bssid_equal(session->detail[i].da, session->detail[j].da)) {
+                da_seen = true;
+            }
+        }
+        if (!bssid_seen) increment_saturated(&session->unique_bssids);
+        if (!da_seen) increment_saturated(&session->unique_das);
+        if (!session->detail[i].reason_known) continue;
+        unsigned slot = session->reason_count;
+        for (unsigned j = 0; j < session->reason_count; ++j) {
+            if (session->reasons[j].reason == session->detail[i].reason) {
+                slot = j;
+                break;
+            }
+        }
+        if (slot == session->reason_count) {
+            if (session->reason_count >= FORENSIC_REASON_LIMIT) continue;
+            session->reasons[slot].reason = session->detail[i].reason;
+            ++session->reason_count;
+        }
+        increment_saturated(&session->reasons[slot].count);
+    }
+}
+
+static void accept_forensic_row(deauth_detector_data_t *data,
+                                const forensic_row_t *row)
+{
+    forensic_session_t *session = &data->forensic;
+    session->sequence_state = FORENSIC_SEQ_INSUFFICIENT;
+    session->latest_sequence_known = row->sequence_known;
+    session->latest_sequence = row->sequence;
+    session->latest_retry_known = row->retry_known;
+    session->latest_retry = row->retry;
+    session->latest_delta = 0;
+    if (row->sequence_known) {
+        for (unsigned i = session->detail_count; i > 0; --i) {
+            const forensic_row_t *previous = &session->detail[i - 1];
+            if (!previous->sequence_known || !forensic_same_stream(previous, row)) continue;
+            if (previous->sequence == row->sequence) {
+                increment_saturated(&session->repeated_sequences);
+                if (row->retry_known && row->retry == 1U) {
+                    session->sequence_state = FORENSIC_SEQ_RETRANSMISSION;
+                } else if (row->retry_known && row->retry == 0U) {
+                    session->sequence_state = FORENSIC_SEQ_REPEATED;
+                } else {
+                    session->sequence_state = FORENSIC_SEQ_DELTA;
+                }
+            } else {
+                session->sequence_state = FORENSIC_SEQ_DELTA;
+            }
+            session->latest_delta = (row->sequence + 4096U - previous->sequence) % 4096U;
+            break;
+        }
+    }
+
+    bool same_burst = session->last_burst_valid &&
+        forensic_same_stream(&session->last_burst_row, row) &&
+        row->ts_us >= session->last_burst_row.ts_us &&
+        row->ts_us - session->last_burst_row.ts_us <= FORENSIC_BURST_GAP_US;
+    if (same_burst) {
+        increment_saturated(&session->current_burst);
+    } else {
+        increment_saturated(&session->bursts);
+        session->current_burst = 1;
+    }
+    if (session->current_burst > session->largest_burst) {
+        session->largest_burst = session->current_burst;
+    }
+    session->last_burst_row = *row;
+    session->last_burst_valid = true;
+
+    increment_saturated(&session->accepted);
+    if (row->protected_known) {
+        if (row->protected_frame) increment_saturated(&session->protected_count);
+        else increment_saturated(&session->unprotected_count);
+    }
+    if (row->retry_known && row->retry) increment_saturated(&session->retry_count);
+    if (!row->channel_known) increment_saturated(&session->unknown_count);
+    if (!row->rssi_known) {
+        increment_saturated(&session->unknown_count);
+        increment_saturated(&session->unknown_rssi);
+    }
+    if (!row->reason_known) increment_saturated(&session->unknown_count);
+    if (!row->sequence_known) increment_saturated(&session->unknown_count);
+    if (!row->retry_known) increment_saturated(&session->unknown_count);
+    if (!row->protected_known) increment_saturated(&session->unknown_count);
+    if (!row->fc_known) increment_saturated(&session->unknown_count);
+    if (row->rssi_known) {
+        if (!session->rssi_available) {
+            session->rssi_available = true;
+            session->rssi_min = session->rssi_max = row->rssi;
+        } else {
+            if (row->rssi < session->rssi_min) session->rssi_min = row->rssi;
+            if (row->rssi > session->rssi_max) session->rssi_max = row->rssi;
+        }
+        if (session->rssi_samples < UINT_MAX) {
+            session->rssi_sum += row->rssi;
+            ++session->rssi_samples;
+        }
+    }
+
+    if (session->detail_count == FORENSIC_DETAIL_LIMIT) {
+        memmove(&session->detail[0], &session->detail[1],
+                (FORENSIC_DETAIL_LIMIT - 1U) * sizeof(session->detail[0]));
+        --session->detail_count;
+        increment_saturated(&session->dropped);
+    }
+    session->detail[session->detail_count++] = *row;
+    recalculate_forensic_bounded_counts(session);
+    data->needs_redraw = true;
+}
+
+static bool parse_optional_decimal(const char *field, int minimum, int maximum,
+                                   bool *known, int *value)
+{
+    if (strcmp(field, "-") == 0) {
+        *known = false;
+        *value = 0;
+        return true;
+    }
+    int parsed = 0;
+    if (!parse_decimal_field(field, minimum < 0, &parsed) ||
+        parsed < minimum || parsed > maximum) return false;
+    *known = true;
+    *value = parsed;
+    return true;
+}
+
+static bool parse_optional_unsigned(const char *field, unsigned maximum,
+                                    bool *known, unsigned *value)
+{
+    if (strcmp(field, "-") == 0) {
+        *known = false;
+        *value = 0;
+        return true;
+    }
+    unsigned parsed = 0;
+    if (!parse_unsigned_field(field, &parsed) || parsed > maximum) return false;
+    *known = true;
+    *value = parsed;
+    return true;
+}
+
+static bool parse_optional_fc(const char *field, bool *known, unsigned *value)
+{
+    if (strcmp(field, "-") == 0) {
+        *known = false;
+        *value = 0;
+        return true;
+    }
+    if (strlen(field) != 6 || field[0] != '0' || field[1] != 'x') return false;
+    for (int i = 2; i < 6; ++i) {
+        if (!isxdigit((unsigned char)field[i])) return false;
+    }
+    char *end = NULL;
+    unsigned long parsed = strtoul(field + 2, &end, 16);
+    if (*end != '\0' || parsed > 0xffffUL) return false;
+    *known = true;
+    *value = (unsigned)parsed;
+    return true;
+}
+
+static bool parse_forensic_line(const char *line, forensic_row_t *row)
+{
+    const char *prefix = "[DEAUTH_FORENSIC/1] FRAME=";
+    if (!line || !row || strncmp(line, prefix, strlen(prefix)) != 0) return false;
+    forensic_row_t parsed = {0};
+    char frame[12], field[32];
+    const char *p = line + strlen(prefix);
+    if (!take_field(&p, " CH=", frame, sizeof(frame)) ||
+        !take_field(&p, " BSSID=", field, sizeof(field)) ||
+        !parse_optional_decimal(field, 1, 233, &parsed.channel_known, &parsed.channel) ||
+        !take_field(&p, " TX=", parsed.bssid, sizeof(parsed.bssid)) ||
+        !bssid_valid(parsed.bssid) ||
+        !take_field(&p, " DA=", parsed.tx, sizeof(parsed.tx)) ||
+        !bssid_valid(parsed.tx) ||
+        !take_field(&p, " RSSI=", parsed.da, sizeof(parsed.da)) ||
+        !bssid_valid(parsed.da) ||
+        !take_field(&p, " REASON=", field, sizeof(field)) ||
+        !parse_optional_decimal(field, -127, 0, &parsed.rssi_known, &parsed.rssi) ||
+        !take_field(&p, " SEQ=", field, sizeof(field)) ||
+        !parse_optional_unsigned(field, 65535U, &parsed.reason_known, &parsed.reason) ||
+        !take_field(&p, " RETRY=", field, sizeof(field)) ||
+        !parse_optional_unsigned(field, 4095U, &parsed.sequence_known, &parsed.sequence) ||
+        !take_field(&p, " PROTECTED=", field, sizeof(field)) ||
+        !parse_optional_unsigned(field, 1U, &parsed.retry_known, &parsed.retry) ||
+        !take_field(&p, " FC=", field, sizeof(field)) ||
+        !parse_optional_unsigned(field, 1U, &parsed.protected_known,
+                                 &parsed.protected_frame) ||
+        !take_field(&p, " TS_US=", field, sizeof(field)) ||
+        !parse_optional_fc(field, &parsed.fc_known, &parsed.fc) ||
+        !parse_u64_field(p, &parsed.ts_us)) return false;
+    if (strcmp(frame, "deauth") == 0) parsed.frame = FORENSIC_FRAME_DEAUTH;
+    else if (strcmp(frame, "disassoc") == 0) parsed.frame = FORENSIC_FRAME_DISASSOC;
+    else return false;
+    *row = parsed;
+    return true;
+}
+
+typedef struct {
+    char frame[12];
+    char bssid[18];
+    char sta[18];
+    char decision[16];
+    char reason[32];
+    int channel;
+} defence_trigger_t;
+
+typedef struct {
+    char response[16];
+    char result[8];
+    char error[32];
+    unsigned frames;
+    uint64_t latency_us;
+} defence_tx_t;
+
+static bool parse_defence_armed_line(const char *line, unsigned *targets,
+                                     bool *pmkid_decoy)
+{
+    const char *prefix = "[DETECTOR_DEFENCE] armed targets=";
+    if (strncmp(line, prefix, strlen(prefix)) != 0) return false;
+    char field[24];
+    const char *p = line + strlen(prefix);
+    if (!take_field(&p, " trace=fast pmkid=", field, sizeof(field)) ||
+        !parse_unsigned_field(field, targets)) return false;
+    if (strcmp(p, "monitor") == 0) *pmkid_decoy = false;
+    else if (strcmp(p, "decoy") == 0) *pmkid_decoy = true;
+    else return false;
+    return true;
+}
+
+static bool parse_defence_trigger_line(const char *line, defence_trigger_t *trigger)
+{
+    const char *prefix = "[DETECTOR_DEFENCE] trigger=";
+    if (strncmp(line, prefix, strlen(prefix)) != 0) return false;
+    defence_trigger_t parsed = {0};
+    char field[24];
+    const char *p = line + strlen(prefix);
+    if (!take_field(&p, " BSSID=", parsed.frame, sizeof(parsed.frame)) ||
+        !take_field(&p, " STA=", parsed.bssid, sizeof(parsed.bssid)) ||
+        !take_field(&p, " RX=", parsed.sta, sizeof(parsed.sta)) ||
+        !take_field(&p, " decision=", field, sizeof(field)) ||
+        !parse_decimal_field(field, false, &parsed.channel) ||
+        !take_field(&p, " reason=", parsed.decision, sizeof(parsed.decision)) ||
+        strlen(p) >= sizeof(parsed.reason)) return false;
+    snprintf(parsed.reason, sizeof(parsed.reason), "%s", p);
+    if ((strcmp(parsed.frame, "deauth") != 0 &&
+         strcmp(parsed.frame, "disassoc") != 0 &&
+         strcmp(parsed.frame, "csa") != 0 &&
+         strcmp(parsed.frame, "pmkid_probe") != 0) ||
+        !bssid_valid(parsed.bssid) || !mac_or_dash_valid(parsed.sta) ||
+        parsed.channel < 1 || parsed.channel > 255 ||
+        (strcmp(parsed.decision, "decoy_4way") != 0 &&
+         strcmp(parsed.decision, "decoy_pmkid") != 0 &&
+         strcmp(parsed.decision, "observe") != 0) ||
+        !status_token_valid(parsed.reason)) return false;
+    *trigger = parsed;
+    return true;
+}
+
+static bool parse_defence_provisional_line(const char *line, char bssid[18],
+                                           int *channel)
+{
+    const char *prefix = "[DETECTOR_DEFENCE] provisional_bssid=";
+    if (strncmp(line, prefix, strlen(prefix)) != 0) return false;
+    char field[24];
+    const char *p = line + strlen(prefix);
+    if (!take_field(&p, " channel=", bssid, 18) || !bssid_valid(bssid) ||
+        strlen(p) >= sizeof(field)) return false;
+    snprintf(field, sizeof(field), "%s", p);
+    return parse_decimal_field(field, false, channel) &&
+           *channel >= 1 && *channel <= 255;
+}
+
+static bool parse_defence_tx_line(const char *line, defence_tx_t *tx)
+{
+    const char *prefix = "[DETECTOR_DEFENCE] tx=";
+    if (strncmp(line, prefix, strlen(prefix)) != 0) return false;
+    defence_tx_t parsed = {0};
+    char stage[16], field[32];
+    const char *p = line + strlen(prefix);
+    if (!take_field(&p, " stage=", parsed.response, sizeof(parsed.response)) ||
+        !take_field(&p, " result=", stage, sizeof(stage)) ||
+        !take_field(&p, " frames=", parsed.result, sizeof(parsed.result)) ||
+        !take_field(&p, " latency_us=", field, sizeof(field)) ||
+        !parse_unsigned_field(field, &parsed.frames) ||
+        !take_field(&p, " error=", field, sizeof(field)) ||
+        !parse_u64_field(field, &parsed.latency_us) ||
+        strlen(p) >= sizeof(parsed.error)) return false;
+    snprintf(parsed.error, sizeof(parsed.error), "%s", p);
+    bool pair_ok = strcmp(parsed.response, "decoy_4way") == 0 &&
+                   strcmp(stage, "m1_m2") == 0;
+    bool pmkid_ok = strcmp(parsed.response, "decoy_pmkid") == 0 &&
+                    strcmp(stage, "m1_pmkid") == 0;
+    if ((!pair_ok && !pmkid_ok) ||
+        (strcmp(parsed.result, "ok") != 0 && strcmp(parsed.result, "error") != 0) ||
+        parsed.frames > 2 || !status_token_valid(parsed.error)) return false;
+    *tx = parsed;
+    return true;
+}
+
+static bool parse_defence_suppressed_line(const char *line, unsigned *count,
+                                          char bssid[18])
+{
+    const char *prefix = "[DETECTOR_DEFENCE] suppressed=";
+    if (strncmp(line, prefix, strlen(prefix)) != 0) return false;
+    char field[32], reason[32];
+    const char *p = line + strlen(prefix);
+    if (!take_field(&p, " reason=", field, sizeof(field)) ||
+        !parse_unsigned_field(field, count) ||
+        !take_field(&p, " BSSID=", reason, sizeof(reason)) ||
+        !status_token_valid(reason) ||
+        !take_field(&p, " window_ms=", bssid, 18) || !bssid_valid(bssid) ||
+        strcmp(p, "1000") != 0) return false;
+    return true;
+}
+
+static bool parse_defence_released_line(const char *line, char bssid[18],
+                                        int *channel, char response[16],
+                                        unsigned *suppressed)
+{
+    const char *prefix = "[DETECTOR_DEFENCE] released_bssid=";
+    if (strncmp(line, prefix, strlen(prefix)) != 0) return false;
+    char field[32];
+    const char *p = line + strlen(prefix);
+    if (!take_field(&p, " channel=", bssid, 18) || !bssid_valid(bssid) ||
+        !take_field(&p, " reason=idle idle_ms=20000 response=", field, sizeof(field)) ||
+        !parse_decimal_field(field, false, channel) || *channel < 1 || *channel > 255 ||
+        !take_field(&p, " suppressed=", response, 16) ||
+        (strcmp(response, "decoy_4way") != 0 &&
+         strcmp(response, "decoy_pmkid") != 0) ||
+        !parse_unsigned_field(p, suppressed)) return false;
+    return true;
+}
+
+static bool parse_defence_stopped_line(const char *line, unsigned *responses,
+                                       char outcome[12])
+{
+    const char *prefix = "[DETECTOR_DEFENCE] stopped observations=";
+    if (strncmp(line, prefix, strlen(prefix)) != 0) return false;
+    const char *separators[] = {
+        " tx_pairs=", " pmkid_m1=", " responses=", " satisfied=",
+        " errors=", " dropped=", " outcome="
+    };
+    char field[32];
+    unsigned values[7] = {0};
+    const char *p = line + strlen(prefix);
+    for (int i = 0; i < 7; ++i) {
+        if (!take_field(&p, separators[i], field, sizeof(field)) ||
+            !parse_unsigned_field(field, &values[i])) return false;
+    }
+    if (strlen(p) >= 12 ||
+        (strcmp(p, "responded") != 0 && strcmp(p, "observed") != 0 &&
+         strcmp(p, "idle") != 0)) return false;
+    *responses = values[3];
+    snprintf(outcome, 12, "%s", p);
+    return true;
 }
 
 static const char *detector_record_line(const char *line)
@@ -625,6 +1200,7 @@ static bool parse_watch_line(const char *line, int *count, int *ordinal,
 static void fail(deauth_detector_data_t *data, const char *message)
 {
     data->exit_confirm_pending = false;
+    data->forensic_accepting = false;
     clear_scan(data);
     set_state(data, DET_ERROR);
     set_message(data, message);
@@ -636,9 +1212,13 @@ static bool send_start_command(deauth_detector_data_t *data)
     const char *legacy_name = "deauth_detector";
     const char *suffix = data->legacy_start_command + strlen(legacy_name);
     const char *trace = data->v2_requested && data->trace_enabled ? " trace" : "";
-    int length = snprintf(command, sizeof(command), "%s%s%s",
+    const char *defence = data->v2_requested && data->mode >= DET_MODE_DEFENCE ?
+                           " defence" : "";
+    const char *pmkid = data->v2_requested && data->mode == DET_MODE_DEFENCE_PMKID ?
+                         " pmkid-decoy" : "";
+    int length = snprintf(command, sizeof(command), "%s%s%s%s%s",
                           data->v2_requested ? "deauth_detector_v2" : legacy_name,
-                          suffix, trace);
+                          suffix, trace, defence, pmkid);
     if (length < 0 || (size_t)length >= sizeof(command)) {
         fail(data, "Selection too large");
         return false;
@@ -652,6 +1232,10 @@ static bool send_start_command(deauth_detector_data_t *data)
 
 static void start_all(deauth_detector_data_t *data)
 {
+    if (defence_requested(data)) {
+        fail(data, "Defence requires BSSID");
+        return;
+    }
     clear_scan(data);
     clear_events(data);
     data->view = VIEW_DEAUTH;
@@ -659,6 +1243,7 @@ static void start_all(deauth_detector_data_t *data)
     data->v2_requested = true;
     data->v2_confirmed = false;
     begin_trace_run(data);
+    clear_defence_status(data);
     set_state(data, DET_START_ALL);
     set_message(data, "Waiting for JanOS start");
     send_start_command(data);
@@ -677,6 +1262,7 @@ static void start_scan(deauth_detector_data_t *data)
 
 static bool send_stop_command(deauth_detector_data_t *data)
 {
+    data->forensic_accepting = false;
     if (uart_send_command("stop") != 0) return false;
     data->stop_pending = true;
     data->stop_send_failed = false;
@@ -759,6 +1345,7 @@ static void start_selected(deauth_detector_data_t *data)
     data->ping_waiting = false;
     clear_events(data);
     begin_trace_run(data);
+    begin_defence_run(data);
     snprintf(data->legacy_start_command, sizeof(data->legacy_start_command), "%s", command);
     set_state(data, DET_START_SELECTED);
     set_message(data, "Waiting for watch proof");
@@ -773,13 +1360,18 @@ static void maybe_activate(deauth_detector_data_t *data)
         return;
     }
     if (data->state == DET_START_ALL) {
+        reset_forensic_session(data);
         set_state(data, DET_ACTIVE_ALL);
         data->last_ping_us = now_us();
         set_message(data, "All channels active");
-    } else if (data->state == DET_START_SELECTED &&
+    } else if (data->state == DET_START_SELECTED && defence_requested(data) &&
+               !data->defence_armed_latched) {
+        set_message(data, "Waiting for Defence arm");
+    } else if (data->state == DET_START_SELECTED && !defence_requested(data) &&
                data->verified_watch_count < data->watch_expected_count) {
         set_message(data, "Waiting for watch proof");
     } else if (data->state == DET_START_SELECTED) {
+        reset_forensic_session(data);
         set_state(data, DET_ACTIVE_SELECTED);
         data->last_ping_us = now_us();
         set_message(data, "BSSID watch verified");
@@ -908,6 +1500,139 @@ static bool watched_bssid(const deauth_detector_data_t *data, const char *bssid)
     return false;
 }
 
+static bool defence_can_update(const deauth_detector_data_t *data)
+{
+    return defence_requested(data) && data->v2_requested &&
+           data->state == DET_ACTIVE_SELECTED;
+}
+
+static bool handle_defence_status_line(deauth_detector_data_t *data,
+                                       const char *line)
+{
+    const char *prefix = "[DETECTOR_DEFENCE]";
+    if (strncmp(line, prefix, strlen(prefix)) != 0) return false;
+
+    unsigned targets = 0;
+    bool pmkid_decoy = false;
+    if (parse_defence_armed_line(line, &targets, &pmkid_decoy)) {
+        bool arm_state = data->state == DET_START_SELECTED ||
+                         data->state == DET_ACTIVE_SELECTED;
+        if (defence_requested(data) && data->v2_requested && arm_state &&
+            targets == (unsigned)data->watch_expected_count &&
+            pmkid_decoy == (data->mode == DET_MODE_DEFENCE_PMKID) &&
+            data->defence_status == DEFENCE_STATUS_WAITING) {
+            data->defence_status = DEFENCE_STATUS_ARMED;
+            data->defence_armed_latched = true;
+            data->needs_redraw = true;
+            maybe_activate(data);
+        }
+        return true;
+    }
+
+    defence_trigger_t trigger;
+    if (parse_defence_trigger_line(line, &trigger)) {
+        bool trigger_ready = data->defence_status == DEFENCE_STATUS_ARMED ||
+                             data->defence_status == DEFENCE_STATUS_RELEASED ||
+                             data->defence_status == DEFENCE_STATUS_RESPONSE_ERROR;
+        if (defence_can_update(data) && watched_bssid(data, trigger.bssid) &&
+            trigger_ready &&
+            !data->defence_transaction_pending) {
+            bool response_allowed = strcmp(trigger.decision, "decoy_4way") == 0 ||
+                (data->mode == DET_MODE_DEFENCE_PMKID &&
+                 strcmp(trigger.decision, "decoy_pmkid") == 0);
+            if (response_allowed) {
+                snprintf(data->defence_bssid, sizeof(data->defence_bssid), "%s",
+                         trigger.bssid);
+                data->defence_channel = trigger.channel;
+                data->defence_error[0] = '\0';
+                data->defence_status = DEFENCE_STATUS_RESPONDING;
+                data->defence_transaction_pending = true;
+                snprintf(data->defence_response, sizeof(data->defence_response), "%s",
+                         trigger.decision);
+                data->needs_redraw = true;
+            }
+        }
+        return true;
+    }
+
+    char bssid[18];
+    int channel = 0;
+    if (parse_defence_provisional_line(line, bssid, &channel)) {
+        if (defence_can_update(data) && watched_bssid(data, bssid) &&
+            data->defence_transaction_pending &&
+            data->defence_status == DEFENCE_STATUS_RESPONDING &&
+            bssid_equal(data->defence_bssid, bssid)) {
+            data->defence_status = DEFENCE_STATUS_PROVISIONAL;
+            data->defence_channel = channel;
+            data->needs_redraw = true;
+        }
+        return true;
+    }
+
+    defence_tx_t tx;
+    if (parse_defence_tx_line(line, &tx)) {
+        if (defence_can_update(data) && data->defence_transaction_pending &&
+            (data->defence_status == DEFENCE_STATUS_RESPONDING ||
+             data->defence_status == DEFENCE_STATUS_PROVISIONAL) &&
+            strcmp(data->defence_response, tx.response) == 0) {
+            snprintf(data->defence_error, sizeof(data->defence_error), "%s", tx.error);
+            if (strcmp(tx.result, "ok") == 0) {
+                data->defence_status = DEFENCE_STATUS_RESPONSE_OK;
+                if (data->defence_responses < UINT_MAX) ++data->defence_responses;
+            } else {
+                data->defence_status = DEFENCE_STATUS_RESPONSE_ERROR;
+            }
+            data->defence_transaction_pending = false;
+            data->needs_redraw = true;
+        }
+        return true;
+    }
+
+    unsigned suppressed = 0;
+    if (parse_defence_suppressed_line(line, &suppressed, bssid)) {
+        if (defence_can_update(data) && watched_bssid(data, bssid)) {
+            data->defence_suppressed = suppressed;
+            data->needs_redraw = true;
+        }
+        return true;
+    }
+
+    char response[16];
+    if (parse_defence_released_line(line, bssid, &channel, response, &suppressed)) {
+        if (defence_can_update(data) && watched_bssid(data, bssid) &&
+            !data->defence_transaction_pending &&
+            data->defence_status == DEFENCE_STATUS_RESPONSE_OK &&
+            bssid_equal(data->defence_bssid, bssid) &&
+            strcmp(data->defence_response, response) == 0) {
+            data->defence_status = DEFENCE_STATUS_RELEASED;
+            snprintf(data->defence_bssid, sizeof(data->defence_bssid), "%s", bssid);
+            snprintf(data->defence_response, sizeof(data->defence_response), "%s", response);
+            data->defence_channel = channel;
+            data->defence_suppressed = suppressed;
+            data->needs_redraw = true;
+        }
+        return true;
+    }
+
+    unsigned responses = 0;
+    char outcome[12];
+    if (parse_defence_stopped_line(line, &responses, outcome)) {
+        if (defence_requested(data) && data->stop_pending &&
+            data->defence_status != DEFENCE_STATUS_OFF) {
+            data->defence_transaction_pending = false;
+            data->defence_status = DEFENCE_STATUS_STOPPED;
+            data->defence_summary_responses = responses;
+            data->defence_summary_valid = true;
+            snprintf(data->defence_outcome, sizeof(data->defence_outcome), "%s", outcome);
+            data->needs_redraw = true;
+        }
+        return true;
+    }
+
+    /* Every exact marker prefix is status traffic, even when malformed. */
+    return true;
+}
+
 static void handle_scan_line(deauth_detector_data_t *data, const char *line)
 {
     if (strstr(line, "Scan failed with status:")) {
@@ -975,6 +1700,22 @@ static void uart_line_callback(const char *line, void *user_data)
     if (!data || !line || data->leaving) return;
 
     const char *record_line = detector_record_line(line);
+    const char *forensic_marker = "[DEAUTH_FORENSIC/1]";
+    if (strncmp(record_line, forensic_marker, strlen(forensic_marker)) == 0) {
+        forensic_row_t forensic;
+        if (data->forensic_accepting && parse_forensic_line(record_line, &forensic) &&
+            (data->state == DET_ACTIVE_ALL ||
+             (data->state == DET_ACTIVE_SELECTED &&
+              watched_bssid(data, forensic.bssid)))) {
+            accept_forensic_row(data, &forensic);
+        }
+        return;
+    }
+    const char *defence_marker = "[DETECTOR_DEFENCE]";
+    if (strncmp(record_line, defence_marker, strlen(defence_marker)) == 0) {
+        handle_defence_status_line(data, record_line);
+        return;
+    }
     const char *trace_marker = "[DETECTOR_TRACE]";
     if (strncmp(record_line, trace_marker, strlen(trace_marker)) == 0) {
         if (data->state == DET_START_ALL || data->state == DET_START_SELECTED ||
@@ -1009,7 +1750,9 @@ static void uart_line_callback(const char *line, void *user_data)
     if (data->stop_pending && stopped_line(line)) {
         detector_state_t state = data->state;
         data->stop_pending = false;
+        data->forensic.finalized = true;
         clear_trace_status(data);
+        clear_defence_status(data);
         if (state == DET_STOP_FOR_SCAN) start_scan(data);
         else if (state == DET_STOP_FOR_ALL) start_all(data);
         else if (state == DET_STOP_BAD_WATCH) fail(data, "BSSID watch mismatch");
@@ -1025,12 +1768,20 @@ static void uart_line_callback(const char *line, void *user_data)
 
     if (data->state == DET_START_ALL || data->state == DET_START_SELECTED) {
         if (is_trace_rejection(data, line)) {
-            mark_trace_unavailable(data);
-            reject_start(data, "Trace unavailable on JanOS");
+            if (defence_requested(data)) {
+                mark_defence_unsupported(data);
+                reject_start(data, "Defence unsupported");
+            } else {
+                mark_trace_unavailable(data);
+                reject_start(data, "Trace unavailable on JanOS");
+            }
             return;
         }
         if (strcmp(line, "Unrecognized command") == 0) {
-            if (data->v2_requested && !data->start_ack && !data->v2_confirmed) {
+            if (defence_requested(data)) {
+                mark_defence_unsupported(data);
+                reject_start(data, "Defence unsupported");
+            } else if (data->v2_requested && !data->start_ack && !data->v2_confirmed) {
                 retry_legacy_start(data);
             } else {
                 reject_start(data, line);
@@ -1038,6 +1789,13 @@ static void uart_line_callback(const char *line, void *user_data)
             return;
         }
         if (is_start_rejection(line)) {
+            if (defence_requested(data) &&
+                (strstr(line, "Defence") || strstr(line, "defence") ||
+                 strstr(line, "pmkid") || strstr(line, "Invalid detector option"))) {
+                mark_defence_unsupported(data);
+                reject_start(data, "Defence unsupported");
+                return;
+            }
             reject_start(data, line);
             return;
         }
@@ -1129,12 +1887,30 @@ static bool trace_status_text(const deauth_detector_data_t *data,
 
 static void draw_trace_choice(const deauth_detector_data_t *data)
 {
-    ui_print_center(2, "Optional channel Trace", UI_COLOR_TEXT);
-    ui_print_center(3, data->trace_enabled ? "Trace: ON" : "Trace: OFF",
-                    data->trace_enabled ? UI_COLOR_HIGHLIGHT : UI_COLOR_DIMMED);
-    ui_print_center(5, "JanOS confirms 1s window", UI_COLOR_DIMMED);
-    ui_print_center(6, "Passive receive only", UI_COLOR_DIMMED);
-    ui_draw_status("SP:Toggle EN:Start Q:Exit");
+    static const char *const names[] = {
+        "Passive", "Trace", "Defence", "Defence + PMKID Lab"
+    };
+    ui_print_center(2, "Detector mode", UI_COLOR_TEXT);
+    ui_print_center(3, names[data->mode], UI_COLOR_HIGHLIGHT);
+    if (data->mode == DET_MODE_PASSIVE) {
+        ui_print_center(5, "Receive only", UI_COLOR_DIMMED);
+    } else if (data->mode == DET_MODE_TRACE) {
+        ui_print_center(5, "JanOS confirms channel", UI_COLOR_DIMMED);
+        ui_print_center(6, "Passive receive only", UI_COLOR_DIMMED);
+    } else {
+        ui_print_center(5, "Fresh BSSID scan required", UI_COLOR_DIMMED);
+        ui_print_center(6, "Controlled networks only", UI_COLOR_DIMMED);
+    }
+    ui_draw_status("SP:Next EN:Start Q:Exit");
+}
+
+static void draw_pmkid_warning(void)
+{
+    ui_print_center(1, "PMKID LAB WARNING", UI_COLOR_HIGHLIGHT);
+    ui_print_center(3, "May interfere with", UI_COLOR_TEXT);
+    ui_print_center(4, "legitimate client joins", UI_COLOR_TEXT);
+    ui_print_center(6, "Controlled RF lab only", UI_COLOR_DIMMED);
+    ui_draw_status("ENTER:Accept ESC/Q:Back");
 }
 
 static void draw_trace_status(const deauth_detector_data_t *data, int row)
@@ -1182,6 +1958,218 @@ static bool trace_footer_text(const deauth_detector_data_t *data,
     }
 }
 
+static bool trace_compact_text(const deauth_detector_data_t *data,
+                               char *line, size_t capacity)
+{
+    switch (data->trace_status) {
+        case TRACE_STATUS_WAITING:
+            snprintf(line, capacity, "Trace wait");
+            return true;
+        case TRACE_STATUS_ARMED:
+            snprintf(line, capacity, "Trace armed");
+            return true;
+        case TRACE_STATUS_CONFIRMING:
+            snprintf(line, capacity, "Trace conf CH%d", data->trace_first_channel);
+            return true;
+        case TRACE_STATUS_LOCKED:
+            snprintf(line, capacity, "Trace CH%d", data->trace_channel);
+            return true;
+        case TRACE_STATUS_RELEASED:
+            snprintf(line, capacity, "Trace rearmed CH%d", data->trace_channel);
+            return true;
+        case TRACE_STATUS_TUNE_FAILED:
+            snprintf(line, capacity, "Trace fail CH%d", data->trace_channel);
+            return true;
+        case TRACE_STATUS_UNAVAILABLE:
+            snprintf(line, capacity, "Trace unavailable");
+            return true;
+        case TRACE_STATUS_OFF:
+        default:
+            return false;
+    }
+}
+
+static bool defence_status_text(const deauth_detector_data_t *data,
+                                char *line, size_t capacity)
+{
+    switch (data->defence_status) {
+        case DEFENCE_STATUS_WAITING:
+            snprintf(line, capacity, "Defence: wait arm");
+            return true;
+        case DEFENCE_STATUS_ARMED:
+            snprintf(line, capacity, "Defence armed");
+            return true;
+        case DEFENCE_STATUS_PROVISIONAL:
+            snprintf(line, capacity, "Provisional CH%d", data->defence_channel);
+            return true;
+        case DEFENCE_STATUS_RESPONDING:
+            snprintf(line, capacity, "Responding %.18s", data->defence_response);
+            return true;
+        case DEFENCE_STATUS_RESPONSE_OK:
+            snprintf(line, capacity, "Response OK %.17s", data->defence_response);
+            return true;
+        case DEFENCE_STATUS_RESPONSE_ERROR:
+            snprintf(line, capacity, "Response error");
+            return true;
+        case DEFENCE_STATUS_RELEASED:
+            snprintf(line, capacity, "Released/rearmed CH%d", data->defence_channel);
+            return true;
+        case DEFENCE_STATUS_STOPPED:
+            snprintf(line, capacity, "Stopped Resp %u",
+                     data->defence_summary_responses);
+            return true;
+        case DEFENCE_STATUS_UNSUPPORTED:
+            snprintf(line, capacity, "Defence unsupported");
+            return true;
+        case DEFENCE_STATUS_OFF:
+        default:
+            return false;
+    }
+}
+
+static void draw_defence_status(const deauth_detector_data_t *data, int row)
+{
+    char line[40];
+    if (!defence_status_text(data, line, sizeof(line))) return;
+    print_line(row, line,
+               data->defence_status == DEFENCE_STATUS_RESPONSE_ERROR ||
+               data->defence_status == DEFENCE_STATUS_UNSUPPORTED ?
+               UI_COLOR_HIGHLIGHT : UI_COLOR_TEXT);
+    if (row < 6) {
+        snprintf(line, sizeof(line), "Responses %u", data->defence_responses);
+        print_line(row + 1, line, UI_COLOR_TEXT);
+    }
+    if (row < 5 && data->defence_suppressed > 0) {
+        snprintf(line, sizeof(line), "Suppressed %u", data->defence_suppressed);
+        print_line(row + 2, line, UI_COLOR_DIMMED);
+    }
+}
+
+static void compact_count(unsigned value, char *text, size_t capacity)
+{
+    if (value > 9999U) snprintf(text, capacity, "9999+");
+    else snprintf(text, capacity, "%u", value);
+}
+
+static int forensic_average_rssi(const forensic_session_t *session)
+{
+    if (!session->rssi_available || session->rssi_samples == 0) return 0;
+    return (int)((session->rssi_sum - (int64_t)(session->rssi_samples / 2U)) /
+                 (int64_t)session->rssi_samples);
+}
+
+static void format_forensic_rssi(const forensic_session_t *session,
+                                 char *line, size_t capacity)
+{
+    char missing[8] = {0};
+    if (session->unknown_rssi > 0) {
+        compact_count(session->unknown_rssi, missing, sizeof(missing));
+    }
+    if (session->rssi_available) {
+        snprintf(line, capacity, session->unknown_rssi > 0 ?
+                 "RSSI %d/%d/%d ?%s" : "RSSI %d/%d/%d",
+                 session->rssi_min, forensic_average_rssi(session),
+                 session->rssi_max, missing);
+    } else {
+        snprintf(line, capacity, session->unknown_rssi > 0 ?
+                 "RSSI -/-/- ?%s" : "RSSI -/-/-", missing);
+    }
+}
+
+static bool forensic_remote_uncertain(const deauth_detector_data_t *data)
+{
+    if (data->forensic.finalized) return false;
+    return data->stop_pending || data->stop_send_failed ||
+           data->state == DET_STOP_FOR_SCAN || data->state == DET_STOP_FOR_ALL ||
+           data->state == DET_STOP_BAD_WATCH || data->state == DET_STOP_EXIT ||
+           data->state == DET_ERROR || data->state == DET_DISCONNECTED;
+}
+
+static void draw_forensic_uncertainty(const deauth_detector_data_t *data)
+{
+    char line[UI_COLS + 1];
+    if (data->state == DET_ERROR || data->state == DET_DISCONNECTED ||
+        data->stop_send_failed) {
+        snprintf(line, sizeof(line), "%.30s", data->message);
+    } else {
+        snprintf(line, sizeof(line), "Stop ACK pending");
+    }
+    print_line(6, line, UI_COLOR_HIGHLIGHT);
+    ui_draw_status("Remote state unknown");
+}
+
+static void draw_forensics(const deauth_detector_data_t *data)
+{
+    const forensic_session_t *session = &data->forensic;
+    char line[64];
+    if (session->accepted == 0) {
+        ui_print_center(3, "Forensics unavailable", UI_COLOR_DIMMED);
+        ui_print_center(5, "Optional JanOS v1 marker", UI_COLOR_DIMMED);
+        ui_print_center(6, "Evidence only", UI_COLOR_TEXT);
+        if (forensic_remote_uncertain(data)) draw_forensic_uncertainty(data);
+        else ui_draw_status("W:Back C:CSA S:Scan");
+        return;
+    }
+
+    char rows_count[8], bursts[8], largest[8], dropped[8];
+    char protected_count[8], unprotected[8], retry[8], unknown[8];
+    compact_count(session->accepted, rows_count, sizeof(rows_count));
+    compact_count(session->bursts, bursts, sizeof(bursts));
+    compact_count(session->largest_burst, largest, sizeof(largest));
+    compact_count(session->dropped, dropped, sizeof(dropped));
+    compact_count(session->protected_count, protected_count, sizeof(protected_count));
+    compact_count(session->unprotected_count, unprotected, sizeof(unprotected));
+    compact_count(session->retry_count, retry, sizeof(retry));
+    compact_count(session->unknown_count, unknown, sizeof(unknown));
+    snprintf(line, UI_COLS + 1, "Rows %s Bursts %s", rows_count, bursts);
+    print_line(1, line, UI_COLOR_TEXT);
+
+    if (session->finalized) {
+        snprintf(line, UI_COLS + 1, "Largest %s Drop %s", largest, dropped);
+        print_line(2, line, UI_COLOR_TEXT);
+        format_forensic_rssi(session, line, UI_COLS + 1);
+        print_line(3, line, UI_COLOR_TEXT);
+        snprintf(line, UI_COLS + 1, "Prot %s Unprot %s", protected_count, unprotected);
+        print_line(4, line, UI_COLOR_TEXT);
+        snprintf(line, UI_COLS + 1, "Retry %s Unknown %s", retry, unknown);
+        print_line(5, line, UI_COLOR_TEXT);
+        print_line(6, "Evidence only", UI_COLOR_TEXT);
+        ui_draw_status(data->state == DET_PICK ? "W:Back to scan" : "W:Back C:CSA");
+        return;
+    }
+
+    format_forensic_rssi(session, line, UI_COLS + 1);
+    print_line(2, line, UI_COLOR_TEXT);
+    switch (session->sequence_state) {
+        case FORENSIC_SEQ_DELTA:
+            snprintf(line, UI_COLS + 1, "Seq %u d+%u R%s", session->latest_sequence,
+                     session->latest_delta, session->latest_retry_known ?
+                     (session->latest_retry ? "1" : "0") : "-");
+            break;
+        case FORENSIC_SEQ_RETRANSMISSION:
+            snprintf(line, UI_COLS + 1, "Seq %u retransmission",
+                     session->latest_sequence);
+            break;
+        case FORENSIC_SEQ_REPEATED:
+            snprintf(line, UI_COLS + 1, "Seq %u repeated sequence",
+                     session->latest_sequence);
+            break;
+        case FORENSIC_SEQ_INSUFFICIENT:
+        default:
+            snprintf(line, UI_COLS + 1, "insufficient sequence data");
+            break;
+    }
+    print_line(3, line, UI_COLOR_TEXT);
+    snprintf(line, UI_COLS + 1, "Unprot %s Retry %s", unprotected, retry);
+    print_line(4, line, UI_COLOR_TEXT);
+    snprintf(line, UI_COLS + 1, "Prot %s Unknown %s", protected_count, unknown);
+    print_line(5, line, UI_COLOR_TEXT);
+    snprintf(line, UI_COLS + 1, "Largest %s Drop %s", largest, dropped);
+    print_line(6, line, UI_COLOR_TEXT);
+    if (forensic_remote_uncertain(data)) draw_forensic_uncertainty(data);
+    else ui_draw_status("Evidence only W:Back");
+}
+
 static void draw_scan(const deauth_detector_data_t *data)
 {
     char line[40];
@@ -1216,7 +2204,9 @@ static void draw_pick(const deauth_detector_data_t *data)
         print_line(3 + slot * 2, line, UI_COLOR_DIMMED);
     }
     print_line(6, data->message, UI_COLOR_HIGHLIGHT);
-    ui_draw_status("SP:Mark EN:Run R:Scan A:All");
+    ui_draw_status(data->forensic.finalized && data->forensic.accepted > 0 ?
+                   "SP:Mark EN:Run W:Evidence" :
+                   "SP:Mark EN:Run R:Scan A:All");
 }
 
 static void draw_watch(const deauth_detector_data_t *data)
@@ -1234,16 +2224,48 @@ static void draw_watch(const deauth_detector_data_t *data)
         snprintf(line, sizeof(line), " %s", ap->bssid);
         print_line(3 + slot * 2, line, UI_COLOR_DIMMED);
     }
-    if (trace_footer_text(data, "C:CSA", line, sizeof(line))) {
-        ui_draw_status(line);
-    } else {
-        ui_draw_status("UP/DN C:CSA S:Scan ESC:Exit");
-    }
+    ui_draw_status("UP/DN W:Forensic C:CSA");
 }
 
 static void draw_deauth(const deauth_detector_data_t *data)
 {
     char line[64];
+    if (defence_requested(data)) {
+        draw_defence_status(data, 1);
+        char trace_line[24] = {0};
+        if (trace_compact_text(data, trace_line, sizeof(trace_line))) {
+            if (data->defence_suppressed > 0) {
+                char count[8];
+                compact_count(data->defence_suppressed, count, sizeof(count));
+                snprintf(line, UI_COLS + 1, "%.19s Sup%.5s", trace_line, count);
+            } else {
+                snprintf(line, UI_COLS + 1, "%s", trace_line);
+            }
+            print_line(3, line, UI_COLOR_TEXT);
+        } else if (data->defence_suppressed > 0) {
+            snprintf(line, UI_COLS + 1, "Suppressed %u", data->defence_suppressed);
+            print_line(3, line, UI_COLOR_DIMMED);
+        }
+        unsigned shown_deauth = data->deauth_count < 0 ? 0U :
+            data->deauth_count > 9999 ? 9999U : (unsigned)data->deauth_count;
+        unsigned shown_csa = data->csa_count < 0 ? 0U :
+            data->csa_count > 9999 ? 9999U : (unsigned)data->csa_count;
+        snprintf(line, UI_COLS + 1, "DEAUTH %u%s CSA %u%s",
+                 shown_deauth, data->deauth_count > 9999 ? "+" : "",
+                 shown_csa, data->csa_count > 9999 ? "+" : "");
+        print_line(4, line, UI_COLOR_TEXT);
+        if (data->deauth_count > 0) {
+            snprintf(line, sizeof(line), "CH %d RSSI %d", data->last_deauth.channel,
+                     data->last_deauth.rssi);
+            print_line(5, line, UI_COLOR_HIGHLIGHT);
+            snprintf(line, UI_COLS + 1, "Claimed TX %s", data->last_deauth.tx);
+            print_line(6, line, UI_COLOR_TEXT);
+        } else {
+            ui_print_center(6, "Waiting for observations", UI_COLOR_DIMMED);
+        }
+        ui_draw_status("S:Scan W:Watch C:CSA Q:Exit");
+        return;
+    }
     if (data->trace_status != TRACE_STATUS_OFF) {
         trace_status_text(data, line, sizeof(line));
         print_line(1, line, data->trace_status == TRACE_STATUS_TUNE_FAILED ?
@@ -1301,7 +2323,7 @@ static void draw_deauth(const deauth_detector_data_t *data)
         } else {
             ui_draw_status(data->state == DET_ACTIVE_SELECTED ?
                            "S:Scan W:Watch C:CSA Q:Exit" :
-                           "S:Scan C:CSA Q:Exit");
+                           "S:Scan W:Forensic C:CSA" );
         }
         return;
     }
@@ -1329,7 +2351,7 @@ static void draw_deauth(const deauth_detector_data_t *data)
             print_line(6, data->last_deauth.da, UI_COLOR_TEXT);
         }
         ui_draw_status(data->state == DET_ACTIVE_SELECTED ?
-                       "S:Scan W:Watch C:CSA Q:Exit" : "S:Scan C:CSA Q:Exit");
+                       "S:Scan W:Watch C:CSA Q:Exit" : "S:Scan W:Forensic C:CSA");
         return;
     }
     if (data->state == DET_ACTIVE_SELECTED) {
@@ -1356,7 +2378,7 @@ static void draw_deauth(const deauth_detector_data_t *data)
     } else {
         print_line(6, "C: CSA notices", UI_COLOR_TEXT);
     }
-    ui_draw_status("S:Scan A:All C:CSA ESC:Exit");
+    ui_draw_status("S:Scan A:All W:Forensic");
 }
 
 static void draw_csa(const deauth_detector_data_t *data)
@@ -1395,6 +2417,8 @@ static void draw_screen(screen_t *self)
     if (!data) return;
     char detail_title[40];
     const char *title = data->exit_confirm_pending ? "EXIT DEAUTH DETECTOR?" :
+                        data->view == VIEW_FORENSICS ?
+                            (data->forensic.finalized ? "FORENSICS SUMMARY" : "FORENSICS v1") :
                         data->view == VIEW_CSA ? "CSA ANNOUNCEMENTS" : "DEAUTH DETECTOR";
     if (!data->exit_confirm_pending && data->view == VIEW_DEAUTH &&
         (data->state == DET_ACTIVE_ALL || data->state == DET_ACTIVE_SELECTED) &&
@@ -1426,15 +2450,26 @@ static void draw_screen(screen_t *self)
     }
     if (data->state == DET_TRACE_CHOICE) {
         draw_trace_choice(data);
+    } else if (data->state == DET_PMKID_WARNING) {
+        draw_pmkid_warning();
     } else if (data->state == DET_SCAN_WAIT_ACK || data->state == DET_SCAN_RUNNING ||
         data->state == DET_SCAN_COLLECT) {
         draw_scan(data);
+    } else if (data->state == DET_PICK && data->view == VIEW_FORENSICS &&
+               data->forensic.finalized && data->forensic.accepted > 0) {
+        draw_forensics(data);
     } else if (data->state == DET_PICK) {
         draw_pick(data);
     } else if (data->state == DET_ACTIVE_ALL || data->state == DET_ACTIVE_SELECTED) {
-        if (data->view == VIEW_CSA) draw_csa(data);
+        if (data->view == VIEW_FORENSICS) draw_forensics(data);
+        else if (data->view == VIEW_CSA) draw_csa(data);
         else if (data->view == VIEW_WATCH && data->state == DET_ACTIVE_SELECTED) draw_watch(data);
         else draw_deauth(data);
+    } else if (data->view == VIEW_FORENSICS && data->forensic.accepted > 0 &&
+               (data->state == DET_STOP_FOR_SCAN || data->state == DET_STOP_FOR_ALL ||
+                data->state == DET_STOP_BAD_WATCH || data->state == DET_STOP_EXIT ||
+                data->state == DET_ERROR || data->state == DET_DISCONNECTED)) {
+        draw_forensics(data);
     } else {
         ui_print_center(2, data->message, UI_COLOR_HIGHLIGHT);
         if (data->state == DET_START_SELECTED) {
@@ -1445,19 +2480,28 @@ static void draw_screen(screen_t *self)
             draw_trace_status(data, 5);
         } else if (data->state == DET_START_ALL) {
             draw_trace_status(data, 4);
-        } else if (data->state == DET_STOP_FOR_SCAN ||
+        } else if (!defence_requested(data) &&
+                   (data->state == DET_STOP_FOR_SCAN ||
                    data->state == DET_STOP_FOR_ALL ||
                    data->state == DET_STOP_BAD_WATCH ||
-                   data->state == DET_STOP_EXIT) {
+                   data->state == DET_STOP_EXIT)) {
             draw_trace_status(data, 4);
         } else if (data->state == DET_ERROR || data->state == DET_DISCONNECTED) {
-            if ((data->stop_pending || data->stop_send_failed) &&
+            if (!defence_requested(data) &&
+                (data->stop_pending || data->stop_send_failed) &&
                 data->trace_status != TRACE_STATUS_OFF) {
                 draw_trace_status(data, 4);
                 ui_print_center(6, "R: fresh scan   A: all", UI_COLOR_DIMMED);
             } else {
                 ui_print_center(4, "Detector not confirmed", UI_COLOR_TEXT);
                 ui_print_center(5, "R: fresh scan   A: all", UI_COLOR_DIMMED);
+            }
+        }
+        if (defence_requested(data) && data->defence_status != DEFENCE_STATUS_OFF) {
+            draw_defence_status(data, 3);
+            char trace_line[40];
+            if (trace_compact_text(data, trace_line, sizeof(trace_line))) {
+                print_line(5, trace_line, UI_COLOR_TEXT);
             }
         }
         ui_draw_status((data->stop_pending ||
@@ -1489,6 +2533,7 @@ static void check_ping(deauth_detector_data_t *data, int64_t now)
         data->exit_confirm_pending = false;
         clear_scan(data);
         data->ping_waiting = false;
+        data->forensic_accepting = false;
         set_state(data, DET_DISCONNECTED);
         set_message(data, "JanOS connection lost");
         return;
@@ -1497,6 +2542,7 @@ static void check_ping(deauth_detector_data_t *data, int64_t now)
         if (uart_send_command("ping") != 0) {
             data->exit_confirm_pending = false;
             clear_scan(data);
+            data->forensic_accepting = false;
             set_state(data, DET_DISCONNECTED);
             set_message(data, "UART connection lost");
             return;
@@ -1549,13 +2595,30 @@ static void on_key(screen_t *self, key_code_t key)
     if (!data || data->leaving) return;
     if (data->state == DET_TRACE_CHOICE) {
         if (key == KEY_SPACE) {
-            data->trace_enabled = !data->trace_enabled;
+            data->mode = (detector_mode_t)((data->mode + 1) % DET_MODE_COUNT);
+            data->trace_enabled = data->mode != DET_MODE_PASSIVE;
             clear_trace_status(data);
         } else if (key == KEY_ENTER) {
-            start_all(data);
+            if (data->mode == DET_MODE_DEFENCE_PMKID) {
+                set_state(data, DET_PMKID_WARNING);
+                set_message(data, "Confirm PMKID Lab warning");
+            } else if (data->mode == DET_MODE_DEFENCE) {
+                stop_then(data, DET_STOP_FOR_SCAN);
+            } else {
+                start_all(data);
+            }
         } else if (key == KEY_ESC || key == KEY_Q) {
             data->leaving = true;
             screen_manager_pop();
+        }
+        return;
+    }
+    if (data->state == DET_PMKID_WARNING) {
+        if (key == KEY_ENTER) {
+            stop_then(data, DET_STOP_FOR_SCAN);
+        } else if (key == KEY_ESC || key == KEY_Q) {
+            set_state(data, DET_TRACE_CHOICE);
+            set_message(data, "Choose detector mode");
         }
         return;
     }
@@ -1585,6 +2648,13 @@ static void on_key(screen_t *self, key_code_t key)
         }
         return;
     }
+    if (data->state == DET_PICK && data->view == VIEW_FORENSICS) {
+        if (key == KEY_W) {
+            data->view = VIEW_DEAUTH;
+            data->needs_redraw = true;
+        }
+        return;
+    }
     if (key == KEY_S &&
         (data->state == DET_START_ALL || data->state == DET_START_SELECTED ||
          data->state == DET_ACTIVE_ALL || data->state == DET_ACTIVE_SELECTED)) {
@@ -1593,14 +2663,17 @@ static void on_key(screen_t *self, key_code_t key)
     }
     if (key == KEY_A &&
         (data->state == DET_ACTIVE_ALL || data->state == DET_ACTIVE_SELECTED)) {
-        if (data->state == DET_ACTIVE_SELECTED) stop_then(data, DET_STOP_FOR_ALL);
+        if (data->state == DET_ACTIVE_SELECTED && !defence_requested(data)) {
+            stop_then(data, DET_STOP_FOR_ALL);
+        }
         return;
     }
-    if (key == KEY_A && data->state == DET_PICK) {
+    if (key == KEY_A && data->state == DET_PICK && data->mode < DET_MODE_DEFENCE) {
         start_all(data);
         return;
     }
-    if (key == KEY_A && (data->state == DET_ERROR || data->state == DET_DISCONNECTED)) {
+    if (key == KEY_A && data->mode < DET_MODE_DEFENCE &&
+        (data->state == DET_ERROR || data->state == DET_DISCONNECTED)) {
         stop_then(data, DET_STOP_FOR_ALL);
         return;
     }
@@ -1613,7 +2686,12 @@ static void on_key(screen_t *self, key_code_t key)
         return;
     }
     if (data->state == DET_PICK) {
-        if (key == KEY_UP && data->cursor > 0) --data->cursor;
+        if (key == KEY_W && data->forensic.finalized &&
+            data->forensic.accepted > 0) {
+            data->view = data->view == VIEW_FORENSICS ? VIEW_DEAUTH : VIEW_FORENSICS;
+        } else if (data->view == VIEW_FORENSICS) {
+            return;
+        } else if (key == KEY_UP && data->cursor > 0) --data->cursor;
         else if (key == KEY_DOWN && data->cursor + 1 < data->scan_count) ++data->cursor;
         else if (key == KEY_SPACE && data->scan_count > 0) {
             data->scan[data->cursor].selected = !data->scan[data->cursor].selected;
@@ -1627,9 +2705,14 @@ static void on_key(screen_t *self, key_code_t key)
     if (key == KEY_C) {
         data->view = data->view == VIEW_CSA ? VIEW_DEAUTH : VIEW_CSA;
         data->needs_redraw = true;
-    } else if (key == KEY_W && data->state == DET_ACTIVE_SELECTED) {
-        data->view = VIEW_WATCH;
-        data->cursor = 0;
+    } else if (key == KEY_W) {
+        if (data->state == DET_ACTIVE_SELECTED) {
+            data->view = data->view == VIEW_WATCH ? VIEW_FORENSICS :
+                         data->view == VIEW_FORENSICS ? VIEW_WATCH : VIEW_WATCH;
+            data->cursor = 0;
+        } else {
+            data->view = data->view == VIEW_FORENSICS ? VIEW_DEAUTH : VIEW_FORENSICS;
+        }
         data->needs_redraw = true;
     } else if (data->view == VIEW_WATCH && key == KEY_UP && data->cursor > 0) {
         --data->cursor;
@@ -1664,8 +2747,9 @@ screen_t *deauth_detector_screen_create(void *params)
     screen->on_key = on_key;
     screen->on_destroy = on_destroy;
     uart_register_line_callback(uart_line_callback, data);
+    data->mode = DET_MODE_PASSIVE;
     set_state(data, DET_TRACE_CHOICE);
-    set_message(data, "Choose optional Trace");
+    set_message(data, "Choose detector mode");
     clear_trace_status(data);
     draw_screen(screen);
     ESP_LOGI(TAG, "Detector screen opened");
